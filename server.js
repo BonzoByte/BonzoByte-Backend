@@ -53,17 +53,13 @@ const isVercelPreview = (origin) =>
 
 const corsOptions = {
     origin(origin, cb) {
-        // allow server-to-server, curl, Postman
-        if (!origin) return cb(null, true);
+        if (!origin) return cb(null, true); // postman/server-to-server
 
-        // exact allowlist from ENV
-        if (corsAllowlist.includes(origin)) return cb(null, true);
+        const isAllowed =
+            corsAllowlist.includes(origin) ||
+            origin.endsWith('.vercel.app'); // ✅ dopušta sve Vercel deploye
 
-        // allow all Vercel preview domains for this project
-        if (isVercelPreview(origin)) return cb(null, true);
-
-        console.warn('CORS blocked:', origin);
-        return cb(new Error('Not allowed by CORS'), false);
+        cb(isAllowed ? null : new Error('Not allowed by CORS'), isAllowed);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
