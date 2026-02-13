@@ -495,14 +495,16 @@ router.get("/ts/:playerTPId", async (req, res) => {
         const id = req.params.playerTPId;
         const key = `players/ts/${id}.br`;
 
-        const brBuffer = await r2GetObjectBuffer(key); // GET iz R2 u Buffer
+        console.log('[ts] key:', key);
+
+        const brBuffer = await r2GetObjectBuffer(key);
         if (!brBuffer) return res.status(404).json({ ok: false, reason: "missing" });
 
         const jsonBuffer = zlib.brotliDecompressSync(brBuffer);
         const data = JSON.parse(jsonBuffer.toString("utf-8"));
 
         res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader("Cache-Control", "public, max-age=3600"); // 1h
+        res.setHeader("Cache-Control", "public, max-age=3600");
         res.json({ ok: true, playerTPId: Number(id), data });
     } catch (e) {
         console.error("[ts] error:", e);
@@ -737,6 +739,21 @@ async function r2GetFirst(keys) {
         }
     }
     return null;
+}
+
+async function r2GetObjectBuffer(key) {
+    if (ARCHIVES_SOURCE !== 'remote') return null; // (ili implementiraj local ako želiš)
+    try {
+        return await fetchRemoteBrToBuffer(key);
+    } catch (e) {
+        // Ako objekt ne postoji, AWS SDK baca grešku tipa NoSuchKey / 404.
+        // Mi to tretiramo kao "not found", ne kao 500.
+        const name = String(e?.name || '');
+        const status = e?.$metadata?.httpStatusCode;
+
+        if (name === 'NoSuchKey' || status === 404) return null;
+        throw e; // ostalo je pravi fail
+    }
 }
 
 export default router;
