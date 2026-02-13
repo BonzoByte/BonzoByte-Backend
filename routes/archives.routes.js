@@ -488,8 +488,26 @@ router.get('/match-details/:id', async (req, res) => {
 
 /* Local-only endpoints (Render remote mode neće imati te fajlove) */
 
-router.get('/ts/:playerTPId', async (_req, res) => {
-    return res.status(501).json({ message: 'TS endpoint is local-only in this build.' });
+import zlib from "zlib";
+
+router.get("/ts/:playerTPId", async (req, res) => {
+  try {
+    const id = req.params.playerTPId;
+    const key = `players/ts/${id}.br`;
+
+    const brBuffer = await r2GetObjectBuffer(key); // GET iz R2 u Buffer
+    if (!brBuffer) return res.status(404).json({ ok: false, reason: "missing" });
+
+    const jsonBuffer = zlib.brotliDecompressSync(brBuffer);
+    const data = JSON.parse(jsonBuffer.toString("utf-8"));
+
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=3600"); // 1h
+    res.json({ ok: true, playerTPId: Number(id), data });
+  } catch (e) {
+    console.error("[ts] error:", e);
+    res.status(500).json({ ok: false });
+  }
 });
 
 // GET /api/archives/players/manifest
@@ -626,6 +644,32 @@ router.get('/status', async (_req, res, next) => {
         return res.json(payload);
     } catch (e) {
         next(e);
+    }
+});
+
+// /api/archives/players/photo/:playerTPId
+router.get("/players/photo/:playerTPId", async (req, res) => {
+    try {
+        const id = req.params.playerTPId;
+
+        // probaj ekstenzije koje imaš u bucketu
+        const candidates = [
+            `players/photo/${id}.jpg`,
+            `players/photo/${id}.jpeg`,
+            `players/photo/${id}.png`,
+            `players/photo/${id}.webp`,
+        ];
+
+        const obj = await r2GetFirstExistingObject(candidates); // helper koji radi HEAD pa GET
+
+        if (!obj) return res.status(404).end();
+
+        res.setHeader("Content-Type", obj.contentType || "image/jpeg");
+        res.setHeader("Cache-Control", "public, max-age=2592000, immutable"); // 30d
+        res.send(obj.bodyBuffer);
+    } catch (e) {
+        console.error("[players/photo] error:", e);
+        res.status(500).json({ ok: false });
     }
 });
 
