@@ -180,6 +180,75 @@ async function listDailyBrFiles() {
         .sort((a, b) => a.localeCompare(b));
 }
 
+async function listIndexBrFiles(entity) {
+    // entity: 'players' | 'tournaments'
+    if (ARCHIVES_SOURCE === 'local') {
+        const dir = entity === 'players' ? PLAYERS_INDEX_DIR : TOURNAMENTS_INDEX_DIR;
+        const files = await fs.promises.readdir(dir);
+        return files.filter((f) => /\.br$/i.test(f)).sort((a, b) => a.localeCompare(b));
+    }
+
+    if (!s3) throw new Error('R2 S3 is not configured for listing');
+
+    const Prefix = `${entity}/indexBuild/`;
+    const keys = [];
+    let ContinuationToken;
+
+    do {
+        const out = await s3.send(
+            new ListObjectsV2Command({
+                Bucket: R2.bucket,
+                Prefix,
+                ContinuationToken,
+            })
+        );
+
+        (out.Contents || []).forEach((obj) => {
+            if (obj.Key && /\.br$/i.test(obj.Key)) keys.push(obj.Key);
+        });
+
+        ContinuationToken = out.IsTruncated ? out.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+
+    return keys
+        .map((k) => k.substring(Prefix.length))
+        .filter((name) => name && /\.br$/i.test(name))
+        .sort((a, b) => a.localeCompare(b));
+}
+
+async function readIndexBuffer(entity, file) {
+    // entity: 'players' | 'tournaments'
+    const safe = String(file || '').trim();
+    if (!safe || safe.includes('..') || safe.includes('/') || safe.includes('\\')) {
+        const err = new Error('Invalid index file name.');
+        err.statusCode = 400;
+        throw err;
+    }
+    if (!/\.br$/i.test(safe)) {
+        const err = new Error('Index file must end with .br');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (ARCHIVES_SOURCE === 'local') {
+        const dir = entity === 'players' ? PLAYERS_INDEX_DIR : TOURNAMENTS_INDEX_DIR;
+        const filePath = path.join(dir, safe);
+        await fs.promises.access(filePath, fs.constants.R_OK);
+        return await fs.promises.readFile(filePath);
+    }
+
+    const key = `${entity}/indexBuild/${safe}`;
+    return await fetchRemoteBrToBuffer(key);
+}
+
+async function buildManifest(entity) {
+    const files = await listIndexBrFiles(entity);
+    if (!files.length) return { entity, count: 0, latest: null, files: [] };
+
+    const latest = files[files.length - 1]; // asc sort -> zadnji je najnoviji po imenu (ako verzija u nazivu raste)
+    return { entity, count: files.length, latest, files };
+}
+
 async function getDailyDateRange() {
     const br = await listDailyBrFiles();
     if (!br.length) return null;
@@ -383,13 +452,6 @@ router.get('/matches/:id', async (req, res) => {
     }
 });
 
-// ✅ Alias za stari frontend
-router.get('/matches/:id', async (req, res) => {
-    // samo proslijedi na istu logiku
-    req.params.id = String(req.params.id || '').trim();
-    return router.handle({ ...req, url: `/matches/${req.params.id}` }, res);
-});
-
 // ✅ alias za frontend: /api/archives/match-details/:id  -> koristi isti handler kao /matches/:id
 router.get('/match-details/:id', async (req, res) => {
     req.params.id = String(req.params.id || '').trim();
@@ -426,20 +488,58 @@ router.get('/ts/:playerTPId', async (_req, res) => {
     return res.status(501).json({ message: 'TS endpoint is local-only in this build.' });
 });
 
-router.get('/players/manifest', async (_req, res) => {
-    return res.status(501).json({ message: 'Players index is local-only in this build.' });
+// Players manifest
+router.get('/players/manifest', async (_req, res, next) => {
+    try {
+        const manifest = await buildManifest('players');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.json(manifest);
+    } catch (e) {
+        next(e);
+    }
 });
 
-router.get('/players/index/:file', async (_req, res) => {
-    return res.status(501).json({ message: 'Players index is local-only in this build.' });
+// Players index file
+router.get('/players/index/:file', async (req, res, next) => {
+    try {
+        const file = String(req.params.file || '').trim();
+        const brBuf = await readIndexBuffer('players', file);
+        const jsonBuf = brotliDecompressSync(brBuf);
+        const text = jsonBuf.toString('utf8').replace(/^\uFEFF/, '');
+
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        return res.send(text); // već je JSON string
+    } catch (e) {
+        next(e);
+    }
 });
 
-router.get('/tournaments/manifest', async (_req, res) => {
-    return res.status(501).json({ message: 'Tournaments index is local-only in this build.' });
+// Tournaments manifest
+router.get('/tournaments/manifest', async (_req, res, next) => {
+    try {
+        const manifest = await buildManifest('tournaments');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.json(manifest);
+    } catch (e) {
+        next(e);
+    }
 });
 
-router.get('/tournaments/index/:file', async (_req, res) => {
-    return res.status(501).json({ message: 'Tournaments index is local-only in this build.' });
+// Tournaments index file
+router.get('/tournaments/index/:file', async (req, res, next) => {
+    try {
+        const file = String(req.params.file || '').trim();
+        const brBuf = await readIndexBuffer('tournaments', file);
+        const jsonBuf = brotliDecompressSync(brBuf);
+        const text = jsonBuf.toString('utf8').replace(/^\uFEFF/, '');
+
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        return res.send(text);
+    } catch (e) {
+        next(e);
+    }
 });
 
 export default router;
