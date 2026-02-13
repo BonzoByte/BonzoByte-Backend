@@ -488,58 +488,99 @@ router.get('/ts/:playerTPId', async (_req, res) => {
     return res.status(501).json({ message: 'TS endpoint is local-only in this build.' });
 });
 
-// Players manifest
+// GET /api/archives/players/manifest
 router.get('/players/manifest', async (_req, res, next) => {
     try {
-        const manifest = await buildManifest('players');
+        const range = await getDailyDateRange(); // već postoji u tvom fileu
+        const latest = await getLatestIndexFile('players');
+
+        if (!range) return res.status(404).json({ message: 'No daily archives found.' });
+        if (!latest) return res.status(404).json({ message: 'No players index files found.' });
+
+        const version = extractVersionFromIndexFile(latest);
+
+        // DailyManifest shape
         res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.json(manifest);
+        return res.json({
+            minDate: range.minDate,
+            maxDate: range.maxDate,
+            generatedAtUtc: new Date().toISOString(),
+            players: {
+                version: version || latest,
+                url: latest,              // <-- frontend očekuje samo filename
+                contentType: 'application/octet-stream',
+            },
+        });
     } catch (e) {
         next(e);
     }
 });
 
-// Players index file
 router.get('/players/index/:file', async (req, res, next) => {
     try {
         const file = String(req.params.file || '').trim();
-        const brBuf = await readIndexBuffer('players', file);
-        const jsonBuf = brotliDecompressSync(brBuf);
-        const text = jsonBuf.toString('utf8').replace(/^\uFEFF/, '');
 
+        const brBuf = await readIndexBuffer('players', file); // čita lokalno ili s R2
         res.setHeader('Cache-Control', 'public, max-age=300');
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        return res.send(text); // već je JSON string
+        res.setHeader('Content-Type', 'application/octet-stream');
+        return res.send(brBuf);
     } catch (e) {
         next(e);
     }
 });
 
-// Tournaments manifest
+// GET /api/archives/tournaments/manifest
 router.get('/tournaments/manifest', async (_req, res, next) => {
     try {
-        const manifest = await buildManifest('tournaments');
+        const range = await getDailyDateRange();
+        const latest = await getLatestIndexFile('tournaments');
+
+        if (!range) return res.status(404).json({ message: 'No daily archives found.' });
+        if (!latest) return res.status(404).json({ message: 'No tournaments index files found.' });
+
+        const version = extractVersionFromIndexFile(latest);
+
+        // DailyManifestTournaments shape
         res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.json(manifest);
+        return res.json({
+            minDate: range.minDate,
+            maxDate: range.maxDate,
+            generatedAtUtc: new Date().toISOString(),
+            tournaments: {
+                version: version || latest,
+                url: latest,
+                contentType: 'application/octet-stream',
+            },
+            tournamentStrength: null, // za sad, dok ne dodamo remote strength index
+        });
     } catch (e) {
         next(e);
     }
 });
 
-// Tournaments index file
 router.get('/tournaments/index/:file', async (req, res, next) => {
     try {
         const file = String(req.params.file || '').trim();
-        const brBuf = await readIndexBuffer('tournaments', file);
-        const jsonBuf = brotliDecompressSync(brBuf);
-        const text = jsonBuf.toString('utf8').replace(/^\uFEFF/, '');
 
+        const brBuf = await readIndexBuffer('tournaments', file);
         res.setHeader('Cache-Control', 'public, max-age=300');
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        return res.send(text);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        return res.send(brBuf);
     } catch (e) {
         next(e);
     }
 });
+
+function extractVersionFromIndexFile(file) {
+    // players.index.v2026-01-22T19-35Z.br -> v2026-01-22T19-35Z
+    const m = String(file || '').match(/\.(v\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z)\.br$/i);
+    return m ? m[1] : '';
+}
+
+async function getLatestIndexFile(entity) {
+    const files = await listIndexBrFiles(entity); // iz mog ranijeg patcha: list R2/local files under {entity}/indexBuild/
+    if (!files.length) return null;
+    return files[files.length - 1]; // asc sort => zadnji je najnoviji po imenu
+}
 
 export default router;
