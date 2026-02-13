@@ -142,7 +142,7 @@ async function readArchiveBuffer(kind, name) {
         return await fs.promises.readFile(filePath);
     }
 
-    const key = kind === 'daily' ? `daily-matches/${name}.br` : `match-details/${name}.br`;
+    const key = kind === 'daily' ? `daily/${name}.br` : `matches/${name}.br`;
     return await fetchRemoteBrToBuffer(key);
 }
 
@@ -154,7 +154,7 @@ async function listDailyBrFiles() {
 
     if (!s3) throw new Error('R2 S3 is not configured for listing');
 
-    const Prefix = 'daily-matches/';
+    const Prefix = 'daily/';
     const keys = [];
     let ContinuationToken;
 
@@ -211,7 +211,7 @@ router.get('/_debug/r2-list', async (req, res, next) => {
         }
         if (!s3) return res.status(500).json({ error: 's3 client is null' });
 
-        const prefix = String(req.query.prefix ?? 'daily-matches/').toString();
+        const prefix = String(req.query.prefix ?? 'daily/').toString();
         const max = Math.min(parseInt(req.query.max ?? '20', 10), 200);
 
         const out = await s3.send(
@@ -284,8 +284,8 @@ router.get('/available-dates', async (_req, res) => {
     }
 });
 
-// Angular: /daily-matches/index.json
-router.get('/daily-matches/index.json', async (_req, res) => {
+// Angular: /daily/index.json
+router.get('/daily/index.json', async (_req, res) => {
     try {
         const range = await getDailyDateRange();
         if (!range) return res.status(404).json({ message: 'No .br files found.' });
@@ -293,13 +293,13 @@ router.get('/daily-matches/index.json', async (_req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=300');
         res.json(range);
     } catch (e) {
-        console.error('❌ /archives/daily-matches/index.json error:', e);
+        console.error('❌ /archives/daily/index.json error:', e);
         res.status(500).json({ message: 'Failed to read daterange.' });
     }
 });
 
-// GET /api/archives/daily-matches/:date  (date = "YYYYMMDD")
-router.get('/daily-matches/:date', async (req, res) => {
+// GET /api/archives/daily/:date  (date = "YYYYMMDD")
+router.get('/daily/:date', async (req, res) => {
     const date = String(req.params.date || '').trim().replace(/\.br$/i, '');
     if (!/^\d{8}$/.test(date)) return res.status(400).json({ message: 'Invalid date format.' });
 
@@ -350,7 +350,7 @@ router.get('/daily-matches/:date', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=300');
         res.json({ date, count: matches.length, matches });
     } catch (e) {
-        console.error('❌ /archives/daily-matches error:', e);
+        console.error('❌ /archives/daily error:', e);
         res.status(500).json({ message: 'Failed to read/decompress archive.' });
     }
 });
@@ -384,7 +384,7 @@ router.get('/matches/:id', async (req, res) => {
 });
 
 // ✅ Alias za stari frontend
-router.get('/match-details/:id', async (req, res) => {
+router.get('/matches/:id', async (req, res) => {
     // samo proslijedi na istu logiku
     req.params.id = String(req.params.id || '').trim();
     return router.handle({ ...req, url: `/matches/${req.params.id}` }, res);
