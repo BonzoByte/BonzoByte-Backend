@@ -660,11 +660,7 @@ router.get("/players/photo/:id", async (req, res) => {
         const keys = ext
             ? [`players/photo/${base}.${ext}`] // ako je već poslao ekstenziju, probaj točno to
             : [
-                `players/photo/${base}.jpg`,
-                `players/photo/${base}.jpeg`,
-                `players/photo/${base}.png`,
-                `players/photo/${base}.webp`,
-                `players/photo/${base}.svg`,
+                `players/photo/${base}.jpg`
             ];
 
         const found = await r2GetFirst(keys);
