@@ -142,7 +142,7 @@ async function readArchiveBuffer(kind, name) {
         return await fs.promises.readFile(filePath);
     }
 
-    const key = kind === 'daily' ? `daily/${name}.br` : `matches/${name}.br`;
+    const key = kind === 'daily' ? `daily-matches/${name}.br` : `matches/${name}.br`;
     return await fetchRemoteBrToBuffer(key);
 }
 
@@ -153,7 +153,7 @@ async function listDailyBrFiles() {
     }
 
     if (!s3) throw new Error('R2 S3 is not configured for listing');
-    const Prefix = 'daily/';
+    const Prefix = 'daily-matches/';
     const keys = [];
     let ContinuationToken;
 
@@ -198,7 +198,7 @@ router.get('/_debug/r2-list', async (req, res, next) => {
 
         assertR2Configured();
 
-        const prefix = (req.query.prefix ?? 'daily/').toString();
+        const prefix = (req.query.prefix ?? 'daily-matches/').toString();
         const max = Math.min(parseInt(req.query.max ?? '20', 10), 200);
 
         const out = await s3.send(new ListObjectsV2Command({
@@ -270,11 +270,11 @@ router.get('/available-dates', async (_req, res) => {
 });
 
 /**
- * ✅ FIX: Angular ti traži /daily/index.json
+ * ✅ FIX: Angular ti traži /daily-matches/index.json
  * Nećemo servirati fizički file; vratit ćemo pravi daterange iz dostupnih arhiva.
  * (Time nema ručnog updateanja ikad.)
  */
-router.get('/daily/index.json', async (_req, res) => {
+router.get('/daily-matches/index.json', async (_req, res) => {
     try {
         const range = await getDailyDateRange();
         if (!range) return res.status(404).json({ message: 'No .br files found.' });
@@ -282,17 +282,17 @@ router.get('/daily/index.json', async (_req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=300');
         res.json(range);
     } catch (e) {
-        console.error('❌ /archives/daily/index.json error:', e);
+        console.error('❌ /archives/daily-matches/index.json error:', e);
         res.status(500).json({ message: 'Failed to read daterange.' });
     }
 });
 
 /**
- * ✅ FIX: nema više /daily/:date(\\d{8}) jer to ruši Express 5.
+ * ✅ FIX: nema više /daily-matches/:date(\\d{8}) jer to ruši Express 5.
  * Ovdje ručno validiramo.
  */
-// GET /api/archives/daily/:date  (date = "YYYYMMDD")
-router.get('/daily/:date', async (req, res) => {
+// GET /api/archives/daily-matches/:date  (date = "YYYYMMDD")
+router.get('/daily-matches/:date', async (req, res) => {
     const date = String(req.params.date || '').trim();
     if (!/^\d{8}$/.test(date)) return res.status(400).json({ message: 'Invalid date format.' });
 
