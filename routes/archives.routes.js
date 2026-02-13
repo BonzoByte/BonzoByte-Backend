@@ -378,6 +378,12 @@ router.get('/matches/:id', async (req, res) => {
     }
 });
 
+router.get('/match-details/:id', (req, res) => {
+    req.url = `/matches/${req.params.id}${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`;
+    return router.handle(req, res);
+  });
+  
+
 // GET /api/archives/ts/:playerTPId
 router.get('/ts/:playerTPId', async (req, res) => {
     try {
