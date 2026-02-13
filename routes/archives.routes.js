@@ -390,6 +390,36 @@ router.get('/matches/:id', async (req, res) => {
     return router.handle({ ...req, url: `/matches/${req.params.id}` }, res);
 });
 
+// ✅ alias za frontend: /api/archives/match-details/:id  -> koristi isti handler kao /matches/:id
+router.get('/match-details/:id', async (req, res) => {
+    req.params.id = String(req.params.id || '').trim();
+    // samo pozovi isti kod kao u /matches/:id (dupliciramo 15 linija radi čistoće)
+    try {
+        const id = req.params.id;
+        if (!/^\d{5,12}$/.test(id)) {
+            return res.status(400).json({ message: 'Invalid id format.' });
+        }
+
+        const brBuf = await readArchiveBuffer('match', id);
+        const rawBuf = brotliDecompressSync(brBuf);
+        const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
+
+        if (String(req.query.download || '').toLowerCase() === '1') {
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
+            res.setHeader('Cache-Control', 'public, max-age=300');
+            return res.send(text);
+        }
+
+        const json = JSON.parse(text);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.json(json);
+    } catch (e) {
+        console.error('❌ /archives/match-details error:', e);
+        return res.status(500).json({ message: 'Failed to read/decompress archive.' });
+    }
+});
+
 /* Local-only endpoints (Render remote mode neće imati te fajlove) */
 
 router.get('/ts/:playerTPId', async (_req, res) => {
