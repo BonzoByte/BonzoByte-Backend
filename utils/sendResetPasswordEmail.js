@@ -6,7 +6,7 @@ const sendResetPasswordEmail = async (email, token) => {
     const link = `${base}/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email).replace(/&/g, '&amp;')}`;
 
     await transporter.sendMail({
-        from: `"BonzoByte" <${process.env.EMAIL_USER || 'noreply@bonzobyte.com'}>`,
+        from: `"BonzoByte" <${env.EMAIL_USER || 'noreply@bonzobyte.com'}>`,
         to: email,
         subject: 'Reset your password',
         html: `

@@ -12,7 +12,7 @@ export default async function sendVerificationEmail(toEmail, user, token) {
 
     await transporter.sendMail({
         to: toEmail,
-        from: `"BonzoByte" <${process.env.SMTP_USER}>`,
+        from: `"BonzoByte" <${env.SMTP_USER}>`,
         subject: 'Verify your email',
         text: `Hi ${user?.name || ''}\n\nClick to verify: ${verifyUrl}`,
         html: `
