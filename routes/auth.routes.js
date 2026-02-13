@@ -15,6 +15,7 @@ import {
 } from '../controllers/auth.controller.js';
 import rateLimit from 'express-rate-limit';
 import { getEntitlements } from '../utils/entitlements.js';
+import { env } from '../config/env.js';
 
 const router = express.Router();
 

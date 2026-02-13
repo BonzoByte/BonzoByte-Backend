@@ -1,7 +1,8 @@
 import transporter from './mailer.js';
+import { env } from '../config/env.js';
 
 const sendResetPasswordEmail = async (email, token) => {
-    const base = process.env.FRONTEND_URL || 'http://localhost:4200';
+    const base = env.FRONTEND_URL || 'http://localhost:4200';
     const link = `${base}/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email).replace(/&/g, '&amp;')}`;
 
     await transporter.sendMail({
