@@ -135,6 +135,25 @@ async function fetchRemoteBrToBuffer(key) {
     return await streamToBuffer(out.Body);
 }
 
+async function r2GetObjectBufferWithMeta(key) {
+    if (!s3) throw new Error("R2 S3 is not configured for reading");
+  
+    try {
+      const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
+      if (!out?.Body) return null;
+  
+      const body = await streamToBuffer(out.Body);
+      return {
+        body,
+        contentType: out.ContentType ?? null,
+      };
+    } catch (e) {
+      // 404 u AWS SDK obično dođe kao error -> samo vrati null
+      if (String(e?.name).includes("NoSuchKey") || e?.$metadata?.httpStatusCode === 404) return null;
+      return null; // ili throw ako želiš vidjeti realne greške
+    }
+  }  
+
 async function readArchiveBuffer(kind, name) {
     if (ARCHIVES_SOURCE === 'local') {
         const filePath = path.join(kind === 'daily' ? DAILY_DIR : MATCH_DETAILS_DIR, `${name}.br`);
@@ -652,24 +671,31 @@ router.get('/status', async (_req, res, next) => {
 // /api/archives/players/photo/:playerTPId
 router.get("/players/photo/:id", async (req, res) => {
     try {
-        const raw = req.params.id; // može biti "554085" ili "photoW.jpg"
-        const hasExt = /\.[a-z0-9]+$/i.test(raw);
-        const base = hasExt ? raw.replace(/\.[a-z0-9]+$/i, "") : raw;
-        const ext = hasExt ? raw.split(".").pop().toLowerCase() : null;
+        const id = String(req.params.id || "").trim();
 
-        const keys = ext
-            ? [`players/photo/${base}.${ext}`] // ako je već poslao ekstenziju, probaj točno to
-            : [
-                `players/photo/${base}.jpg`
-            ];
+        // "photoM.jpg" / "photoW.jpg" -> direktno serve
+        if (id === "photoM.jpg" || id === "photoW.jpg") {
+            const key = `players/photo/${id}`;
+            const found = await r2GetObjectBufferWithMeta(key); // vidi helper niže
+            if (!found) return res.status(404).end();
+            res.setHeader("Content-Type", found.contentType ?? "image/jpeg");
+            res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+            return res.send(found.body);
+        }
 
-        const found = await r2GetFirst(keys);
-        if (!found) return res.status(404).end();
+        // normal player jpg (bez ekstenzije)
+        const key = `players/photo/${id}.jpg`;
+        const found = await r2GetObjectBufferWithMeta(key);
 
-        res.setHeader("Content-Type", found.contentType ?? "application/octet-stream");
+        if (!found) {
+            // fallback: ako player nema sliku, vrati default (ovdje biramo W/M po prefiksu ili query paramu)
+            // Najbolje: frontend pošalje ?g=W ili ?g=M
+            const g = String(req.query.g || "M").toUpperCase() === "W" ? "W" : "M";
+            return res.redirect(302, `/api/archives/players/photo/photo${g}.jpg`);
+        }
+
+        res.setHeader("Content-Type", found.contentType ?? "image/jpeg");
         res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
-
-        // ako ti found.body bude stream umjesto Buffer, ovo će failati -> vidi napomenu ispod
         return res.send(found.body);
     } catch (e) {
         console.error("players/photo failed", e);
@@ -723,18 +749,6 @@ async function getRemoteObject(key) {
         contentType: out.ContentType ?? null,
         etag: out.ETag ?? null,
     };
-}
-
-async function r2GetFirst(keys) {
-    for (const key of keys) {
-        try {
-            return await getRemoteObject(key);
-        } catch (e) {
-            if (isNotFound(e)) continue;
-            throw e;
-        }
-    }
-    return null;
 }
 
 async function r2GetObjectBuffer(key) {
