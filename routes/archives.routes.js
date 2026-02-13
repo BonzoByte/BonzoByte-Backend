@@ -3,7 +3,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { brotliDecompressSync } from 'zlib';
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 
 const router = Router();
 
@@ -181,7 +181,6 @@ async function listDailyBrFiles() {
 }
 
 async function listIndexBrFiles(entity) {
-    // entity: 'players' | 'tournaments'
     if (ARCHIVES_SOURCE === 'local') {
         const dir = entity === 'players' ? PLAYERS_INDEX_DIR : TOURNAMENTS_INDEX_DIR;
         const files = await fs.promises.readdir(dir);
@@ -214,6 +213,11 @@ async function listIndexBrFiles(entity) {
         .map((k) => k.substring(Prefix.length))
         .filter((name) => name && /\.br$/i.test(name))
         .sort((a, b) => a.localeCompare(b));
+}
+
+async function getLatestIndexFile(entity) {
+    const files = await listIndexBrFiles(entity);
+    return files.length ? files[files.length - 1] : null;
 }
 
 async function readIndexBuffer(entity, file) {
@@ -571,6 +575,60 @@ router.get('/tournaments/index/:file', async (req, res, next) => {
     }
 });
 
+router.get('/status', async (_req, res, next) => {
+    try {
+        const range = await getDailyDateRange(); // već postoji
+        const latestDaily = await (async () => {
+            const br = await listDailyBrFiles(); // već postoji
+            if (!br.length) return null;
+            br.sort((a, b) => b.localeCompare(a));
+            return br[0].replace(/\.br$/i, '');
+        })();
+
+        const latestPlayersIndex = await getLatestIndexFile('players');
+        const latestTournamentsIndex = await getLatestIndexFile('tournaments');
+
+        const payload = {
+            ok: true,
+            source: ARCHIVES_SOURCE,
+            bucket: ARCHIVES_SOURCE === 'remote' ? R2.bucket : null,
+            endpoint: ARCHIVES_SOURCE === 'remote' ? R2.endpoint : null,
+
+            daily: {
+                range: range ?? null,
+                latest: latestDaily ? { yyyymmdd: latestDaily, iso: yyyymmddToIso(latestDaily) } : null,
+            },
+
+            indexes: {
+                players: latestPlayersIndex ? { latest: latestPlayersIndex } : null,
+                tournaments: latestTournamentsIndex ? { latest: latestTournamentsIndex } : null,
+            },
+
+            checks: null,
+            nowUtc: new Date().toISOString(),
+        };
+
+        // Remote: napravi 2-3 HEAD provjere da odmah znamo da objekt stvarno postoji
+        if (ARCHIVES_SOURCE === 'remote') {
+            const checks = [];
+
+            if (latestDaily) checks.push(headRemote(`daily/${latestDaily}.br`));
+            // matches sample: uzmi 1 key iz matches/ ako želiš, ali je skuplje listati.
+            if (latestPlayersIndex) checks.push(headRemote(`players/indexBuild/${latestPlayersIndex}`));
+            if (latestTournamentsIndex) checks.push(headRemote(`tournaments/indexBuild/${latestTournamentsIndex}`));
+
+            payload.checks = await Promise.allSettled(checks).then((results) =>
+                results.map((r) => (r.status === 'fulfilled' ? { ok: true, ...r.value } : { ok: false, error: String(r.reason) }))
+            );
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json(payload);
+    } catch (e) {
+        next(e);
+    }
+});
+
 function extractVersionFromIndexFile(file) {
     // players.index.v2026-01-22T19-35Z.br -> v2026-01-22T19-35Z
     const m = String(file || '').match(/\.(v\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z)\.br$/i);
@@ -581,6 +639,18 @@ async function getLatestIndexFile(entity) {
     const files = await listIndexBrFiles(entity); // iz mog ranijeg patcha: list R2/local files under {entity}/indexBuild/
     if (!files.length) return null;
     return files[files.length - 1]; // asc sort => zadnji je najnoviji po imenu
+}
+
+async function headRemote(key) {
+    if (!s3) throw new Error('R2 S3 is not configured');
+    const out = await s3.send(new HeadObjectCommand({ Bucket: R2.bucket, Key: key }));
+    return {
+        key,
+        size: out.ContentLength ?? null,
+        lastModified: out.LastModified ? new Date(out.LastModified).toISOString() : null,
+        contentType: out.ContentType ?? null,
+        etag: out.ETag ?? null,
+    };
 }
 
 export default router;
