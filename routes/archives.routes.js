@@ -50,7 +50,7 @@ const formatResultDetails = (s = '') =>
     String(s || '')
         .split(' ')
         .filter(Boolean)
-        .map(tok => {
+        .map((tok) => {
             const m = tok.match(/^(\d)(\d)(\(.+?\))?$/);
             return m ? `${m[1]}:${m[2]}${m[3] || ''}` : tok;
         })
@@ -65,14 +65,15 @@ const dashPairAligned = (a, b, decimals = 2) => {
     return { left, right, text: `${left} - ${right}` };
 };
 
+const yyyymmddToIso = (yyyymmdd) =>
+    `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+
 /* ------------------------------ Config ----------------------------- */
 
-const ARCHIVES_SOURCE = (process.env.ARCHIVES_SOURCE || 'remote').toLowerCase(); // 'remote' | 'local'
-if (process.env.ARCHIVES_SOURCE === 'remote') {
-    assertR2Configured();
-}
-const ARCHIVES_BASE_URL = process.env.ARCHIVES_BASE_URL || '';
+const ARCHIVES_SOURCE = String(process.env.ARCHIVES_SOURCE || 'remote').trim().toLowerCase(); // 'remote' | 'local'
+const ARCHIVES_BASE_URL = process.env.ARCHIVES_BASE_URL || ''; // legacy
 
+// local dirs (samo za local mode)
 const DAILY_DIR = process.env.BROTLI_DAILY_DIR || 'd:\\BrotliArchives\\DayliMatches';
 const MATCH_DETAILS_DIR = process.env.BROTLI_MATCH_DETAILS_DIR || 'd:\\BrotliArchives\\MatchDetails';
 
@@ -84,7 +85,6 @@ const TOURNAMENTS_INDEX_DIR =
     process.env.BROTLI_TOURNAMENTS_INDEX_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\tournaments\\indexBuild';
 
-// R2 S3 (za listanje datuma)
 const R2 = {
     bucket: process.env.R2_BUCKET || '',
     accountId: process.env.R2_ACCOUNT_ID || '',
@@ -94,6 +94,21 @@ const R2 = {
     accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
 };
+
+function assertR2Configured() {
+    const required = ['R2_BUCKET', 'R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'];
+    const missing = required.filter((k) => !process.env[k] || String(process.env[k]).trim() === '');
+    if (missing.length) {
+        const msg = `R2 S3 not configured, missing: ${missing.join(', ')}`;
+        const err = new Error(msg);
+        err.statusCode = 500;
+        throw err;
+    }
+}
+
+if (ARCHIVES_SOURCE === 'remote') {
+    assertR2Configured();
+}
 
 const s3 =
     ARCHIVES_SOURCE === 'remote' && R2.bucket && R2.endpoint && R2.accessKeyId && R2.secretAccessKey
@@ -105,26 +120,13 @@ const s3 =
         })
         : null;
 
-const yyyymmddToIso = yyyymmdd => `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
-
-function assertR2Configured() {
-    const required = [
-        'R2_BUCKET',
-        'R2_ACCOUNT_ID', // ili R2_ENDPOINT ako koristiš direktno endpoint
-        'R2_ACCESS_KEY_ID',
-        'R2_SECRET_ACCESS_KEY',
-    ];
-
-    const missing = required.filter((k) => !process.env[k]);
-    if (missing.length) {
-        const msg = `R2 S3 not configured, missing: ${missing.join(', ')}`;
-        const err = new Error(msg);
-        err.statusCode = 500;
-        throw err;
-    }
-}
-
 /* --------------------------- IO utilities --------------------------- */
+
+async function streamToBuffer(stream) {
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    return Buffer.concat(chunks);
+}
 
 async function fetchRemoteBrToBuffer(key) {
     if (!s3) throw new Error('R2 S3 is not configured for reading');
@@ -140,21 +142,18 @@ async function readArchiveBuffer(kind, name) {
         return await fs.promises.readFile(filePath);
     }
 
-    const key =
-        kind === 'daily'
-            ? `daily-matches/${name}.br`
-            : `match-details/${name}.br`;
-
+    const key = kind === 'daily' ? `daily-matches/${name}.br` : `match-details/${name}.br`;
     return await fetchRemoteBrToBuffer(key);
 }
 
 async function listDailyBrFiles() {
     if (ARCHIVES_SOURCE === 'local') {
         const files = await fs.promises.readdir(DAILY_DIR);
-        return files.filter(f => /^\d{8}\.br$/i.test(f)).sort((a, b) => a.localeCompare(b));
+        return files.filter((f) => /^\d{8}\.br$/i.test(f)).sort((a, b) => a.localeCompare(b));
     }
 
     if (!s3) throw new Error('R2 S3 is not configured for listing');
+
     const Prefix = 'daily-matches/';
     const keys = [];
     let ContinuationToken;
@@ -168,7 +167,7 @@ async function listDailyBrFiles() {
             })
         );
 
-        (out.Contents || []).forEach(obj => {
+        (out.Contents || []).forEach((obj) => {
             if (obj.Key && /\.br$/i.test(obj.Key)) keys.push(obj.Key);
         });
 
@@ -176,8 +175,8 @@ async function listDailyBrFiles() {
     } while (ContinuationToken);
 
     return keys
-        .map(k => k.substring(Prefix.length))
-        .filter(name => /^\d{8}\.br$/i.test(name))
+        .map((k) => k.substring(Prefix.length))
+        .filter((name) => /^\d{8}\.br$/i.test(name))
         .sort((a, b) => a.localeCompare(b));
 }
 
@@ -192,27 +191,41 @@ async function getDailyDateRange() {
 
 /* ------------------------------- Routes ---------------------------- */
 
+router.get('/_debug/config', (_req, res) => {
+    res.json({
+        ARCHIVES_SOURCE,
+        R2: {
+            bucket: R2.bucket,
+            endpoint: R2.endpoint,
+            hasAccessKey: !!R2.accessKeyId,
+            hasSecret: !!R2.secretAccessKey,
+            s3Enabled: !!s3,
+        },
+    });
+});
+
 router.get('/_debug/r2-list', async (req, res, next) => {
     try {
-        if (process.env.ARCHIVES_SOURCE !== 'remote') {
-            return res.status(400).json({ error: 'ARCHIVES_SOURCE is not remote' });
+        if (ARCHIVES_SOURCE !== 'remote') {
+            return res.status(400).json({ error: 'ARCHIVES_SOURCE is not remote', ARCHIVES_SOURCE });
         }
+        if (!s3) return res.status(500).json({ error: 's3 client is null' });
 
-        assertR2Configured();
-
-        const prefix = (req.query.prefix ?? 'daily-matches/').toString();
+        const prefix = String(req.query.prefix ?? 'daily-matches/').toString();
         const max = Math.min(parseInt(req.query.max ?? '20', 10), 200);
 
-        const out = await s3.send(new ListObjectsV2Command({
-            Bucket: process.env.R2_BUCKET,
-            Prefix: prefix,
-            MaxKeys: max
-        }));
+        const out = await s3.send(
+            new ListObjectsV2Command({
+                Bucket: R2.bucket,
+                Prefix: prefix,
+                MaxKeys: max,
+            })
+        );
 
-        const keys = (out.Contents ?? []).map(o => o.Key);
+        const keys = (out.Contents ?? []).map((o) => o.Key);
 
         res.json({
-            bucket: process.env.R2_BUCKET,
+            bucket: R2.bucket,
             prefix,
             keyCount: keys.length,
             sample: keys.slice(0, 50),
@@ -263,7 +276,7 @@ router.get('/daterange', async (_req, res) => {
 router.get('/available-dates', async (_req, res) => {
     try {
         const br = await listDailyBrFiles();
-        const dates = br.map(f => yyyymmddToIso(f.replace(/\.br$/i, '')));
+        const dates = br.map((f) => yyyymmddToIso(f.replace(/\.br$/i, '')));
         res.json(dates);
     } catch (e) {
         console.error('❌ /archives/available-dates error:', e);
@@ -271,11 +284,7 @@ router.get('/available-dates', async (_req, res) => {
     }
 });
 
-/**
- * ✅ FIX: Angular ti traži /daily-matches/index.json
- * Nećemo servirati fizički file; vratit ćemo pravi daterange iz dostupnih arhiva.
- * (Time nema ručnog updateanja ikad.)
- */
+// Angular: /daily-matches/index.json
 router.get('/daily-matches/index.json', async (_req, res) => {
     try {
         const range = await getDailyDateRange();
@@ -289,13 +298,9 @@ router.get('/daily-matches/index.json', async (_req, res) => {
     }
 });
 
-/**
- * ✅ FIX: nema više /daily-matches/:date(\\d{8}) jer to ruši Express 5.
- * Ovdje ručno validiramo.
- */
 // GET /api/archives/daily-matches/:date  (date = "YYYYMMDD")
 router.get('/daily-matches/:date', async (req, res) => {
-    const date = String(req.params.date || '').trim();
+    const date = String(req.params.date || '').trim().replace(/\.br$/i, '');
     if (!/^\d{8}$/.test(date)) return res.status(400).json({ message: 'Invalid date format.' });
 
     try {
@@ -308,7 +313,7 @@ router.get('/daily-matches/:date', async (req, res) => {
             return res.status(500).json({ message: 'Archive content is not an array.' });
         }
 
-        const matches = rows.map(m => {
+        const matches = rows.map((m) => {
             const tourNameClean = cleanTournamentName(m.tournamentEventName || '');
             const iso3 = (m.tournamentEventCountryISO3 || '').toUpperCase();
             const countrySuffix = iso3 && iso3 !== 'WLD' ? ` (${iso3})` : '';
@@ -345,7 +350,7 @@ router.get('/daily-matches/:date', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=300');
         res.json({ date, count: matches.length, matches });
     } catch (e) {
-        console.error('❌ /archives/daily error:', e);
+        console.error('❌ /archives/daily-matches error:', e);
         res.status(500).json({ message: 'Failed to read/decompress archive.' });
     }
 });
@@ -378,101 +383,33 @@ router.get('/matches/:id', async (req, res) => {
     }
 });
 
-router.get('/match-details/:id', (req, res) => {
-    req.url = `/matches/${req.params.id}${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`;
-    return router.handle(req, res);
-  });
-  
+// ✅ Alias za stari frontend
+router.get('/match-details/:id', async (req, res) => {
+    // samo proslijedi na istu logiku
+    req.params.id = String(req.params.id || '').trim();
+    return router.handle({ ...req, url: `/matches/${req.params.id}` }, res);
+});
 
-// GET /api/archives/ts/:playerTPId
-router.get('/ts/:playerTPId', async (req, res) => {
-    try {
-        const id = String(req.params.playerTPId).trim();
-        if (!/^\d{3,12}$/.test(id)) return res.status(400).json({ message: 'Invalid id format.' });
+/* Local-only endpoints (Render remote mode neće imati te fajlove) */
 
-        const TS_DIR = process.env.BROTLI_TS_DIR || 'd:\\BrotliArchives\\Players\\ts';
-
-        const filePath = path.join(TS_DIR, `${id}.br`);
-        await fs.promises.access(filePath, fs.constants.R_OK);
-        const brBuf = await fs.promises.readFile(filePath);
-
-        const rawBuf = brotliDecompressSync(brBuf);
-        const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
-
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        res.type('application/json').send(text);
-    } catch (e) {
-        console.error('❌ /archives/ts error:', e);
-        return res.status(500).json({ message: 'Failed to read/decompress TS archive.' });
-    }
+router.get('/ts/:playerTPId', async (_req, res) => {
+    return res.status(501).json({ message: 'TS endpoint is local-only in this build.' });
 });
 
 router.get('/players/manifest', async (_req, res) => {
-    try {
-        const manifestPath = path.join(PLAYERS_INDEX_DIR, 'manifest.json');
-        const text = await fs.promises.readFile(manifestPath, 'utf8');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.type('application/json').send(text);
-    } catch (e) {
-        console.error('❌ /archives/players/manifest error:', e);
-        res.status(500).json({ message: 'Failed to read players manifest.' });
-    }
+    return res.status(501).json({ message: 'Players index is local-only in this build.' });
 });
 
-router.get('/players/index/:file', async (req, res) => {
-    try {
-        const file = String(req.params.file || '').trim();
-        if (!/^players\.index\.v[\dT\-]+Z\.br$/i.test(file)) {
-            return res.status(400).json({ message: 'Invalid index filename.' });
-        }
-
-        const filePath = path.join(PLAYERS_INDEX_DIR, file);
-        await fs.promises.access(filePath, fs.constants.R_OK);
-
-        res.setHeader('Content-Type', 'application/octet-stream');
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.sendFile(filePath);
-    } catch (e) {
-        console.error('❌ /archives/players/index error:', e);
-        res.status(500).json({ message: 'Failed to read players index.' });
-    }
+router.get('/players/index/:file', async (_req, res) => {
+    return res.status(501).json({ message: 'Players index is local-only in this build.' });
 });
 
 router.get('/tournaments/manifest', async (_req, res) => {
-    try {
-        const manifestPath = path.join(TOURNAMENTS_INDEX_DIR, 'manifest.tournaments.json');
-        const text = await fs.promises.readFile(manifestPath, 'utf8');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.type('application/json').send(text);
-    } catch (e) {
-        console.error('❌ /archives/tournaments/manifest error:', e);
-        res.status(500).json({ message: 'Failed to read tournaments manifest.' });
-    }
+    return res.status(501).json({ message: 'Tournaments index is local-only in this build.' });
 });
 
-router.get('/tournaments/index/:file', async (req, res) => {
-    try {
-        const file = String(req.params.file || '').trim();
-        if (!/^tournaments\.index\.v[\dT\-]+Z\.br$/i.test(file)) {
-            return res.status(400).json({ message: 'Invalid index filename.' });
-        }
-
-        const filePath = path.join(TOURNAMENTS_INDEX_DIR, file);
-        await fs.promises.access(filePath, fs.constants.R_OK);
-
-        res.setHeader('Content-Type', 'application/octet-stream');
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.sendFile(filePath);
-    } catch (e) {
-        console.error('❌ /archives/tournaments/index error:', e);
-        res.status(500).json({ message: 'Failed to read tournaments index.' });
-    }
+router.get('/tournaments/index/:file', async (_req, res) => {
+    return res.status(501).json({ message: 'Tournaments index is local-only in this build.' });
 });
-
-async function streamToBuffer(stream) {
-    const chunks = [];
-    for await (const chunk of stream) chunks.push(chunk);
-    return Buffer.concat(chunks);
-}
 
 export default router;
