@@ -6,6 +6,7 @@ const archivesOnly = String(process.env.ARCHIVES_ONLY || '').toLowerCase() === '
 const isDev = (process.env.NODE_ENV || 'development') === 'development';
 
 const Env = z.object({
+    FRONTEND_URL: z.string().url().default('http://localhost:4200'),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().default(5000),
 
@@ -45,3 +46,4 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 export const corsAllowlist = env.CORS_ORIGINS.split(',').map(s => s.trim());
+export const frontendUrl = env.FRONTEND_URL;

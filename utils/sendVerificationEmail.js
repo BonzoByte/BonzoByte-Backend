@@ -1,5 +1,5 @@
 // utils/sendVerificationEmail.js
-import transporter from './mailer.js'; // prilagodi putanju ako ti je drugdje
+import transporter from './mailer.js';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:4200';
 
 export default async function sendVerificationEmail(toEmail, user, token) {

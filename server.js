@@ -48,18 +48,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* ----------------------------- C O R S ------------------------------ */
+const isVercelPreview = (origin) =>
+    /^https:\/\/bonzo-byte-frontend.*\.vercel\.app$/.test(origin);
+
 const corsOptions = {
     origin(origin, cb) {
-        const ok = !origin || corsAllowlist.includes(origin);
-        cb(ok ? null : new Error('Not allowed by CORS'), ok);
+        // allow server-to-server, curl, Postman
+        if (!origin) return cb(null, true);
+
+        // exact allowlist from ENV
+        if (corsAllowlist.includes(origin)) return cb(null, true);
+
+        // allow all Vercel preview domains for this project
+        if (isVercelPreview(origin)) return cb(null, true);
+
+        console.warn('CORS blocked:', origin);
+        return cb(new Error('Not allowed by CORS'), false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
     credentials: true,
     optionsSuccessStatus: 204,
 };
+
 app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 /* --------------------------- Core middleware ------------------------ */
 app.use(helmet({

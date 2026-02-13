@@ -18,7 +18,7 @@ import { getEntitlements } from '../utils/entitlements.js';
 
 const router = express.Router();
 
-const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:4200';
+const FRONTEND = env.FRONTEND_URL || 'http://localhost:4200';
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
