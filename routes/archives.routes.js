@@ -697,4 +697,46 @@ async function headRemote(key) {
     };
 }
 
+function isNotFound(err) {
+    const name = err?.name || '';
+    const code = err?.Code || err?.code || err?.$metadata?.httpStatusCode;
+    const http = err?.$metadata?.httpStatusCode;
+
+    return (
+        http === 404 ||
+        code === 404 ||
+        code === 'NotFound' ||
+        code === 'NoSuchKey' ||
+        name === 'NoSuchKey' ||
+        name === 'NotFound'
+    );
+}
+
+async function getRemoteObject(key) {
+    if (!s3) throw new Error('R2 S3 is not configured');
+
+    const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
+    if (!out?.Body) throw new Error(`Empty body for key: ${key}`);
+
+    const body = await streamToBuffer(out.Body);
+    return {
+        key,
+        body, // Buffer
+        contentType: out.ContentType ?? null,
+        etag: out.ETag ?? null,
+    };
+}
+
+async function r2GetFirst(keys) {
+    for (const key of keys) {
+        try {
+            return await getRemoteObject(key);
+        } catch (e) {
+            if (isNotFound(e)) continue;
+            throw e;
+        }
+    }
+    return null;
+}
+
 export default router;
