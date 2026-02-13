@@ -72,7 +72,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
 /* --------------------------- Core middleware ------------------------ */
 app.use(helmet({
