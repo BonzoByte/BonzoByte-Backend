@@ -650,21 +650,29 @@ router.get('/status', async (_req, res, next) => {
 // /api/archives/players/photo/:playerTPId
 router.get("/players/photo/:id", async (req, res) => {
     try {
-        const id = req.params.id; // "554085" (bez .jpg)
+        const raw = req.params.id; // može biti "554085" ili "photoW.jpg"
+        const hasExt = /\.[a-z0-9]+$/i.test(raw);
+        const base = hasExt ? raw.replace(/\.[a-z0-9]+$/i, "") : raw;
+        const ext = hasExt ? raw.split(".").pop().toLowerCase() : null;
 
-        const keys = [
-            `players/photo/${id}.jpg`,
-            `players/photo/${id}.jpeg`,
-            `players/photo/${id}.png`,
-            `players/photo/${id}.webp`,
-        ];
+        const keys = ext
+            ? [`players/photo/${base}.${ext}`] // ako je već poslao ekstenziju, probaj točno to
+            : [
+                `players/photo/${base}.jpg`,
+                `players/photo/${base}.jpeg`,
+                `players/photo/${base}.png`,
+                `players/photo/${base}.webp`,
+                `players/photo/${base}.svg`,
+            ];
 
-        const found = await r2GetFirst(keys); // HEAD/GET loop
+        const found = await r2GetFirst(keys);
         if (!found) return res.status(404).end();
 
-        res.setHeader("Content-Type", found.contentType ?? "image/jpeg");
+        res.setHeader("Content-Type", found.contentType ?? "application/octet-stream");
         res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
-        return res.send(found.body); // Buffer
+
+        // ako ti found.body bude stream umjesto Buffer, ovo će failati -> vidi napomenu ispod
+        return res.send(found.body);
     } catch (e) {
         console.error("players/photo failed", e);
         return res.status(500).json({ ok: false });
