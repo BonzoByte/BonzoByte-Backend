@@ -123,7 +123,7 @@ async function readArchiveBuffer(kind, name) {
         return await fs.promises.readFile(filePath);
     }
 
-    const key = kind === 'daily' ? `daily-matches/${name}.br` : `match-details/${name}.br`;
+    const key = kind === 'daily' ? `daily/${name}.br` : `matches/${name}.br`;
     return await fetchRemoteBrToBuffer(key);
 }
 
@@ -134,7 +134,7 @@ async function listDailyBrFiles() {
     }
 
     if (!s3) throw new Error('R2 S3 is not configured for listing');
-    const Prefix = 'daily-matches/';
+    const Prefix = 'daily/';
     const keys = [];
     let ContinuationToken;
 
@@ -298,8 +298,8 @@ router.get('/daily/:date', async (req, res) => {
     }
 });
 
-// GET /api/archives/match-details/:id
-router.get('/match-details/:id', async (req, res) => {
+// GET /api/archives/matches/:id
+router.get('/matches/:id', async (req, res) => {
     try {
         const id = String(req.params.id).trim();
         if (!/^\d{5,12}$/.test(id)) {
@@ -321,7 +321,7 @@ router.get('/match-details/:id', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=300');
         return res.json(json);
     } catch (e) {
-        console.error('❌ /archives/match-details error:', e);
+        console.error('❌ /archives/matches error:', e);
         return res.status(500).json({ message: 'Failed to read/decompress archive.' });
     }
 });
