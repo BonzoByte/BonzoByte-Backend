@@ -635,12 +635,6 @@ function extractVersionFromIndexFile(file) {
     return m ? m[1] : '';
 }
 
-async function getLatestIndexFile(entity) {
-    const files = await listIndexBrFiles(entity); // iz mog ranijeg patcha: list R2/local files under {entity}/indexBuild/
-    if (!files.length) return null;
-    return files[files.length - 1]; // asc sort => zadnji je najnoviji po imenu
-}
-
 async function headRemote(key) {
     if (!s3) throw new Error('R2 S3 is not configured');
     const out = await s3.send(new HeadObjectCommand({ Bucket: R2.bucket, Key: key }));
