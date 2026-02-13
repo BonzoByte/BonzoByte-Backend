@@ -3,7 +3,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { brotliDecompressSync } from 'zlib';
-import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 
 const router = Router();
 
@@ -127,12 +127,10 @@ function assertR2Configured() {
 /* --------------------------- IO utilities --------------------------- */
 
 async function fetchRemoteBrToBuffer(key) {
-    if (!ARCHIVES_BASE_URL) throw new Error('ARCHIVES_BASE_URL is not set');
-    const url = `${ARCHIVES_BASE_URL.replace(/\/+$/, '')}/${key.replace(/^\/+/, '')}`;
-    const r = await fetch(url, { method: 'GET' });
-    if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
-    const ab = await r.arrayBuffer();
-    return Buffer.from(ab);
+    if (!s3) throw new Error('R2 S3 is not configured for reading');
+    const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
+    if (!out.Body) throw new Error(`Empty body for key: ${key}`);
+    return await streamToBuffer(out.Body);
 }
 
 async function readArchiveBuffer(kind, name) {
@@ -142,7 +140,11 @@ async function readArchiveBuffer(kind, name) {
         return await fs.promises.readFile(filePath);
     }
 
-    const key = kind === 'daily' ? `daily-matches/${name}.br` : `matches/${name}.br`;
+    const key =
+        kind === 'daily'
+            ? `daily-matches/${name}.br`
+            : `match-details/${name}.br`;
+
     return await fetchRemoteBrToBuffer(key);
 }
 
@@ -460,5 +462,11 @@ router.get('/tournaments/index/:file', async (req, res) => {
         res.status(500).json({ message: 'Failed to read tournaments index.' });
     }
 });
+
+async function streamToBuffer(stream) {
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    return Buffer.concat(chunks);
+}
 
 export default router;
