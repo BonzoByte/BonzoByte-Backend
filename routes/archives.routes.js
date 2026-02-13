@@ -491,23 +491,23 @@ router.get('/match-details/:id', async (req, res) => {
 import zlib from "zlib";
 
 router.get("/ts/:playerTPId", async (req, res) => {
-  try {
-    const id = req.params.playerTPId;
-    const key = `players/ts/${id}.br`;
+    try {
+        const id = req.params.playerTPId;
+        const key = `players/ts/${id}.br`;
 
-    const brBuffer = await r2GetObjectBuffer(key); // GET iz R2 u Buffer
-    if (!brBuffer) return res.status(404).json({ ok: false, reason: "missing" });
+        const brBuffer = await r2GetObjectBuffer(key); // GET iz R2 u Buffer
+        if (!brBuffer) return res.status(404).json({ ok: false, reason: "missing" });
 
-    const jsonBuffer = zlib.brotliDecompressSync(brBuffer);
-    const data = JSON.parse(jsonBuffer.toString("utf-8"));
+        const jsonBuffer = zlib.brotliDecompressSync(brBuffer);
+        const data = JSON.parse(jsonBuffer.toString("utf-8"));
 
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Cache-Control", "public, max-age=3600"); // 1h
-    res.json({ ok: true, playerTPId: Number(id), data });
-  } catch (e) {
-    console.error("[ts] error:", e);
-    res.status(500).json({ ok: false });
-  }
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Cache-Control", "public, max-age=3600"); // 1h
+        res.json({ ok: true, playerTPId: Number(id), data });
+    } catch (e) {
+        console.error("[ts] error:", e);
+        res.status(500).json({ ok: false });
+    }
 });
 
 // GET /api/archives/players/manifest
@@ -648,28 +648,26 @@ router.get('/status', async (_req, res, next) => {
 });
 
 // /api/archives/players/photo/:playerTPId
-router.get("/players/photo/:playerTPId", async (req, res) => {
+router.get("/players/photo/:id", async (req, res) => {
     try {
-        const id = req.params.playerTPId;
+        const id = req.params.id; // "554085" (bez .jpg)
 
-        // probaj ekstenzije koje imaš u bucketu
-        const candidates = [
+        const keys = [
             `players/photo/${id}.jpg`,
             `players/photo/${id}.jpeg`,
             `players/photo/${id}.png`,
             `players/photo/${id}.webp`,
         ];
 
-        const obj = await r2GetFirstExistingObject(candidates); // helper koji radi HEAD pa GET
+        const found = await r2GetFirst(keys); // HEAD/GET loop
+        if (!found) return res.status(404).end();
 
-        if (!obj) return res.status(404).end();
-
-        res.setHeader("Content-Type", obj.contentType || "image/jpeg");
-        res.setHeader("Cache-Control", "public, max-age=2592000, immutable"); // 30d
-        res.send(obj.bodyBuffer);
+        res.setHeader("Content-Type", found.contentType ?? "image/jpeg");
+        res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+        return res.send(found.body); // Buffer
     } catch (e) {
-        console.error("[players/photo] error:", e);
-        res.status(500).json({ ok: false });
+        console.error("players/photo failed", e);
+        return res.status(500).json({ ok: false });
     }
 });
 
