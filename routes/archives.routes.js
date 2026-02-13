@@ -68,6 +68,9 @@ const dashPairAligned = (a, b, decimals = 2) => {
 /* ------------------------------ Config ----------------------------- */
 
 const ARCHIVES_SOURCE = (process.env.ARCHIVES_SOURCE || 'remote').toLowerCase(); // 'remote' | 'local'
+if (process.env.ARCHIVES_SOURCE === 'remote') {
+    assertR2Configured();
+}
 const ARCHIVES_BASE_URL = process.env.ARCHIVES_BASE_URL || '';
 
 const DAILY_DIR = process.env.BROTLI_DAILY_DIR || 'd:\\BrotliArchives\\DayliMatches';
@@ -103,7 +106,23 @@ const s3 =
         : null;
 
 const yyyymmddToIso = yyyymmdd => `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
-const isoToYyyymmdd = iso => String(iso || '').replaceAll('-', ''); // "YYYY-MM-DD" -> "YYYYMMDD"
+
+function assertR2Configured() {
+    const required = [
+        'R2_BUCKET',
+        'R2_ACCOUNT_ID', // ili R2_ENDPOINT ako koristiš direktno endpoint
+        'R2_ACCESS_KEY_ID',
+        'R2_SECRET_ACCESS_KEY',
+    ];
+
+    const missing = required.filter((k) => !process.env[k]);
+    if (missing.length) {
+        const msg = `R2 S3 not configured, missing: ${missing.join(', ')}`;
+        const err = new Error(msg);
+        err.statusCode = 500;
+        throw err;
+    }
+}
 
 /* --------------------------- IO utilities --------------------------- */
 
@@ -170,6 +189,37 @@ async function getDailyDateRange() {
 }
 
 /* ------------------------------- Routes ---------------------------- */
+
+router.get('/_debug/r2-list', async (req, res, next) => {
+    try {
+        if (process.env.ARCHIVES_SOURCE !== 'remote') {
+            return res.status(400).json({ error: 'ARCHIVES_SOURCE is not remote' });
+        }
+
+        assertR2Configured();
+
+        const prefix = (req.query.prefix ?? 'daily/').toString();
+        const max = Math.min(parseInt(req.query.max ?? '20', 10), 200);
+
+        const out = await s3.send(new ListObjectsV2Command({
+            Bucket: process.env.R2_BUCKET,
+            Prefix: prefix,
+            MaxKeys: max
+        }));
+
+        const keys = (out.Contents ?? []).map(o => o.Key);
+
+        res.json({
+            bucket: process.env.R2_BUCKET,
+            prefix,
+            keyCount: keys.length,
+            sample: keys.slice(0, 50),
+            isTruncated: !!out.IsTruncated,
+        });
+    } catch (e) {
+        next(e);
+    }
+});
 
 // GET /api/archives/latest-daily
 router.get('/latest-daily', async (_req, res) => {
