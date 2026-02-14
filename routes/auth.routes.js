@@ -20,6 +20,7 @@ import {
     contactUs,
     requestResetPassword,
     updateUserProfile,
+    devVerifyUser,
 } from '../controllers/auth.controller.js';
 import { getEntitlements } from '../utils/entitlements.js';
 import { env } from '../config/env.js';
@@ -79,6 +80,7 @@ router.post('/forgotPassword', forgotPassword);
 router.post('/reset-password', resetPassword);
 router.post('/request-reset-password', requestResetPassword);
 router.post('/resend-verification', resendVerificationEmail);
+router.post('/dev/verify', devVerifyUser);
 router.post('/contact', contactLimiter, contactUs);
 
 // /me – vrati trenutno prijavljenog korisnika (JWT u Authorization)

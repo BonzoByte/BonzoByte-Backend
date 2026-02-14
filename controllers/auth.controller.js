@@ -406,6 +406,68 @@ export const getMe = (req, res) => {
   });
 };
 
+// ✅ DEV ONLY: force-verify user (for testing trial/login without emails)
+export const devVerifyUser = async (req, res) => {
+  try {
+    // gate: only when explicitly enabled
+    const allow =
+      String(process.env.DEV_BYPASS_VERIFY || '') === '1' ||
+      String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
+
+    if (!allow) {
+      return res.status(404).json({ message: 'Not found' });
+    }
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Email is required.',
+      });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        code: 'USER_NOT_FOUND',
+        message: 'User not found.',
+      });
+    }
+
+    user.isVerified = true;
+    user.isUser = true;
+
+    // (optional) ako baš želimo, možemo osigurati trial struct
+    user.trial = user.trial || { endsAt: null, grantedDaysTotal: 0, lastGrantedAt: null };
+
+    await user.save();
+
+    return res.status(200).json({
+      status: 'ok',
+      message: 'User verified (DEV).',
+      user: {
+        _id: user._id.toString(),
+        email: user.email,
+        nickname: user.nickname,
+        name: user.name,
+        isVerified: !!user.isVerified,
+        isUser: !!user.isUser,
+        isAdmin: !!user.isAdmin,
+        entitlements: getEntitlements(user),
+      },
+    });
+  } catch (e) {
+    console.error('[DEV VERIFY ERROR]:', e);
+    return res.status(500).json({
+      status: 'error',
+      code: 'SERVER_ERROR',
+      message: 'Server error.',
+    });
+  }
+};
+
 export const contactUs = asyncHandler(async (req, res) => {
   const { name, email, message } = req.body || {};
   if (!name || !email || !message) {
