@@ -511,6 +511,7 @@ router.get('/match-details/:id', optionalAuth, async (req, res) => {
             const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, 2);
             if (!allowed) {
                 res.setHeader('Cache-Control', 'no-store');
+                res.setHeader('X-BB-Guard', '1');
                 return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, 2));
             }
         }
@@ -561,7 +562,7 @@ router.get('/debug/lock/:id', async (req, res) => {
             isFinished,
             allowedAsGuest: allowed,
             lockedResponseExample: buildDetailsLockedResponse(expectedStartUtc, 2),
-        });
+        }).setHeader('X-BB-Guard', 'LOCKED');
     } catch (e) {
         console.error('debug lock error', e);
         return res.status(500).json({ message: 'debug lock failed' });
