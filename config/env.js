@@ -18,6 +18,8 @@ const Env = z.object({
     JWT_EXPIRES_IN: z.string().default('1d'),
     JWT_VERIFICATION_EXPIRES_IN: z.string().default('1h'),
 
+    DETAILS_LOCK_HOURS: Number(process.env.DETAILS_LOCK_HOURS ?? 2),
+
     EMAIL_USER: z.string().email().optional(),
     EMAIL_PASS: z.string().optional(),
     GOOGLE_CLIENT_ID: z.string().optional(),
