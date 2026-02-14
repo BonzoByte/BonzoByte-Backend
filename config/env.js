@@ -18,7 +18,12 @@ const Env = z.object({
     JWT_EXPIRES_IN: z.string().default('1d'),
     JWT_VERIFICATION_EXPIRES_IN: z.string().default('1h'),
 
-    DETAILS_LOCK_HOURS: z.coerce.number().int().min(0).max(24).default(2),
+    DETAILS_LOCK_HOURS: z.coerce
+        .number()
+        .min(0)
+        .max(24)
+        .default(2)
+        .refine((n) => Number.isInteger(n), { message: 'DETAILS_LOCK_HOURS must be an integer.' }),
 
     EMAIL_USER: z.string().email().optional(),
     EMAIL_PASS: z.string().optional(),
