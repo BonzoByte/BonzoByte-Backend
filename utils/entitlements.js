@@ -2,14 +2,14 @@ import { getNow } from './now.js';
 
 export function hasActiveTrial(u) {
     const ends = u?.trial?.endsAt ? new Date(u.trial.endsAt) : null;
-    return Boolean(ends && ends > new Date());
+    return Boolean(ends && ends > getNow());
 }
 
 export function hasActiveSubscription(u) {
     if (u?.subscription?.isLifetime) return true;
 
     const until = u?.subscription?.validUntil ? new Date(u.subscription.validUntil) : null;
-    return Boolean(until && until > new Date() && u?.subscription?.status === 'active');
+    return Boolean(until && until > getNow() && u?.subscription?.status === 'active');
 }
 
 export function isPremium(u) {
