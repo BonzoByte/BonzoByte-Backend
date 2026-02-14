@@ -285,6 +285,45 @@ async function getDailyDateRange() {
     return { minDate: yyyymmddToIso(first), maxDate: yyyymmddToIso(last) };
 }
 
+async function serveMatchDetails(req, res) {
+    const id = String(req.params.id || '').trim();
+    if (!/^\d{5,12}$/.test(id)) {
+        return res.status(400).json({ message: 'Invalid id format.' });
+    }
+
+    const brBuf = await readArchiveBuffer('match', id);
+    const rawBuf = brotliDecompressSync(brBuf);
+    const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
+
+    const json = JSON.parse(text);
+
+    const expectedStartUtc = json?.m003;
+    const isFinished = !!json?.m656;
+
+    if (!isFinished) {
+        const user = req.user || null;
+        const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, 2);
+
+        if (!allowed) {
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('X-BB-Route', 'match-details');
+            return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, 2));
+        }
+    }
+
+    if (String(req.query.download || '').toLowerCase() === '1') {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('X-BB-Route', 'match-details');
+        return res.send(text);
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('X-BB-Route', 'match-details');
+    return res.json(json);
+}
+
 /* ------------------------------- Routes ---------------------------- */
 
 router.get('/_debug/config', (_req, res) => {
@@ -456,75 +495,20 @@ router.get('/daily/:date', async (req, res) => {
     }
 });
 
-// GET /api/archives/matches/:id
-router.get('/matches/:id', async (req, res) => {
+// ✅ legacy: /api/archives/matches/:id (guarded!)
+router.get('/matches/:id', optionalAuth, async (req, res) => {
     try {
-        const id = String(req.params.id).trim();
-        if (!/^\d{5,12}$/.test(id)) {
-            return res.status(400).json({ message: 'Invalid id format.' });
-        }
-
-        const brBuf = await readArchiveBuffer('match', id);
-        const rawBuf = brotliDecompressSync(brBuf);
-        const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
-
-        if (String(req.query.download || '').toLowerCase() === '1') {
-            res.setHeader('Content-Type', 'application/json; charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
-            res.setHeader('Cache-Control', 'public, max-age=300');
-            return res.send(text);
-        }
-
-        const json = JSON.parse(text);
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.json(json);
+        return await serveMatchDetails(req, res);
     } catch (e) {
         console.error('❌ /archives/matches error:', e);
         return res.status(500).json({ message: 'Failed to read/decompress archive.' });
     }
 });
 
-// ✅ alias za frontend: /api/archives/match-details/:id
+// ✅ frontend alias: /api/archives/match-details/:id (guarded!)
 router.get('/match-details/:id', optionalAuth, async (req, res) => {
-    req.params.id = String(req.params.id || '').trim();
-
     try {
-        const id = req.params.id;
-        if (!/^\d{5,12}$/.test(id)) {
-            return res.status(400).json({ message: 'Invalid id format.' });
-        }
-
-        const brBuf = await readArchiveBuffer('match', id);
-        const rawBuf = brotliDecompressSync(brBuf);
-        const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
-
-        const json = JSON.parse(text);
-
-        // ✅ derive start + finished iz details arhive
-        const expectedStartUtc = json?.m003; // npr "2024-03-08T00:10:00"
-        const isFinished = !!json?.m656;
-
-        // ✅ enforce lock only for unfinished
-        if (!isFinished) {
-            const user = req.user || null;
-
-            const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, 2);
-            if (!allowed) {
-                res.setHeader('Cache-Control', 'no-store');
-                res.setHeader('X-BB-Guard', '1');
-                return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, 2));
-            }
-        }
-
-        if (String(req.query.download || '').toLowerCase() === '1') {
-            res.setHeader('Content-Type', 'application/json; charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
-            res.setHeader('Cache-Control', 'public, max-age=300');
-            return res.send(text);
-        }
-
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.json(json);
+        return await serveMatchDetails(req, res);
     } catch (e) {
         console.error('❌ /archives/match-details error:', e);
         return res.status(500).json({ message: 'Failed to read/decompress archive.' });
@@ -548,9 +532,11 @@ router.get('/debug/lock/:id', async (req, res) => {
         const start = new Date(expectedStartUtc);
         const unlockAt = new Date(start.getTime() - 2 * 60 * 60 * 1000);
 
-        const allowed = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, 2);
+        const allowedAsGuest = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, 2);
 
         res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-BB-Debug', '1');
+
         return res.json({
             ok: true,
             id,
@@ -560,9 +546,9 @@ router.get('/debug/lock/:id', async (req, res) => {
             startIso: isNaN(start.getTime()) ? null : start.toISOString(),
             unlockAtIso: isNaN(unlockAt.getTime()) ? null : unlockAt.toISOString(),
             isFinished,
-            allowedAsGuest: allowed,
+            allowedAsGuest,
             lockedResponseExample: buildDetailsLockedResponse(expectedStartUtc, 2),
-        }).setHeader('X-BB-Guard', 'LOCKED');
+        });
     } catch (e) {
         console.error('debug lock error', e);
         return res.status(500).json({ message: 'debug lock failed' });
