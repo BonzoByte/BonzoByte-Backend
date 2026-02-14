@@ -146,6 +146,10 @@ router.get('/nickname-exists/:nickname', async (req, res) => {
     }
 });
 
+router.get('/debug/routes', (_req, res) => {
+    res.json({ ok: true, hasDevVerify: true });
+});
+
 function issueJwtHandler(req, res) {
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
 
