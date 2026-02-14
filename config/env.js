@@ -18,7 +18,7 @@ const Env = z.object({
     JWT_EXPIRES_IN: z.string().default('1d'),
     JWT_VERIFICATION_EXPIRES_IN: z.string().default('1h'),
 
-    DETAILS_LOCK_HOURS: Number(process.env.DETAILS_LOCK_HOURS ?? 2),
+    DETAILS_LOCK_HOURS: z.coerce.number().int().min(0).max(24).default(2),
 
     EMAIL_USER: z.string().email().optional(),
     EMAIL_PASS: z.string().optional(),
@@ -46,8 +46,8 @@ const Env = z.object({
 
 const parsed = Env.safeParse(process.env);
 if (!parsed.success) {
-    console.error('Invalid ENV:', parsed.error.flatten().fieldErrors);
-    process.exit(1);
+    console.error(parsed.error.format());
+    throw new Error('Invalid environment variables');
 }
 
 export const env = parsed.data;
