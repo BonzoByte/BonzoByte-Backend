@@ -5,6 +5,7 @@ import path from 'path';
 import { brotliDecompressSync } from 'zlib';
 import { canAccessFutureMatchDetails } from '../utils/entitlements.js';
 import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
+import { optionalAuth } from '../middleware/auth.middleware.js';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getNowDebug } from '../utils/now.js';
 
@@ -536,13 +537,6 @@ function maybeDownload(req, res, id, text, json) {
         return res.send(text);
     }
     return res.json(json);
-}
-
-export function optionalAuth(req, _res, next) {
-    const hdr = req.headers.authorization || '';
-    if (!hdr.startsWith('Bearer ')) return next();
-    // verify token, load user, set req.user
-    // on error -> next()
 }
 
 /* Local-only endpoints (Render remote mode neće imati te fajlove) */
