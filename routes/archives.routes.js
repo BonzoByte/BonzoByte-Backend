@@ -518,12 +518,45 @@ router.get('/matches/:id', optionalAuth, async (req, res) => {
 // ✅ frontend alias: /api/archives/match-details/:id (guarded!)
 router.get('/match-details/:id', optionalAuth, async (req, res) => {
     try {
-        return await serveMatchDetails(req, res);
+      const id = String(req.params.id || '').trim();
+      if (!/^\d{5,12}$/.test(id)) {
+        return res.status(400).json({ message: 'Invalid id format.' });
+      }
+  
+      const brBuf = await readArchiveBuffer('match', id);
+      const rawBuf = brotliDecompressSync(brBuf);
+      const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
+      const json = JSON.parse(text);
+  
+      const expectedStartUtc = json?.m003;     // npr. "2016-01-04T10:30:00"
+      const isFinished = !!json?.m656;
+  
+      if (!isFinished) {
+        const user = req.user || null;
+        const lockHours = 2;
+  
+        const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, lockHours);
+        if (!allowed) {
+          res.setHeader('Cache-Control', 'no-store');
+          res.setHeader('X-BB-Guard', '1');
+          return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, lockHours));
+        }
+      }
+  
+      if (String(req.query.download || '').toLowerCase() === '1') {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.send(text);
+      }
+  
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      return res.json(json);
     } catch (e) {
-        console.error('❌ /archives/match-details error:', e);
-        return res.status(500).json({ message: 'Failed to read/decompress archive.' });
+      console.error('❌ /archives/match-details error:', e);
+      return res.status(500).json({ message: 'Failed to read/decompress archive.' });
     }
-});
+  });  
 
 router.get('/debug/lock/:id', async (req, res) => {
     try {
