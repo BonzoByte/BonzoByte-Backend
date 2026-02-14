@@ -14,7 +14,6 @@ export default async function protect(req, res, next) {
         }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
         const user = await User.findById(decoded.id).select('-password');
 
         if (!user) {
@@ -29,46 +28,8 @@ export default async function protect(req, res, next) {
 }
 
 // --------------------
-// Role guards
+// OPTIONAL AUTH (NEW)
 // --------------------
-export function isUser(req, res, next) {
-    if (!req.user || !req.user.isUser) {
-        return res.status(403).json({ message: 'User access required.' });
-    }
-    next();
-}
-
-export function isAdmin(req, res, next) {
-    if (!req.user || !req.user.isAdmin) {
-        return res.status(403).json({ message: 'Admin access required.' });
-    }
-    next();
-}
-
-export default async function protect(req, res, next) {
-    try {
-        const auth = req.headers.authorization || '';
-        const [type, token] = auth.split(' ');
-
-        if (type !== 'Bearer' || !token) {
-            return res.status(401).json({ message: 'Nema tokena. Prijava potrebna.' });
-        }
-
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await User.findById(decoded.id).select('-password');
-
-        if (!user) {
-            return res.status(401).json({ message: 'Korisnik nije pronađen.' });
-        }
-
-        req.user = user;
-        next();
-    } catch (err) {
-        return res.status(401).json({ message: 'Token nije ispravan ili je istekao.' });
-    }
-}
-
-// ✅ Optional auth: ne ruši request ako nema/je nevaljan token
 export async function optionalAuth(req, _res, next) {
     try {
         const auth = req.headers.authorization || '';
@@ -88,4 +49,21 @@ export async function optionalAuth(req, _res, next) {
         req.user = null;
         return next();
     }
-}  
+}
+
+// --------------------
+// Role guards
+// --------------------
+export function isUser(req, res, next) {
+    if (!req.user || !req.user.isUser) {
+        return res.status(403).json({ message: 'User access required.' });
+    }
+    next();
+}
+
+export function isAdmin(req, res, next) {
+    if (!req.user || !req.user.isAdmin) {
+        return res.status(403).json({ message: 'Admin access required.' });
+    }
+    next();
+}
