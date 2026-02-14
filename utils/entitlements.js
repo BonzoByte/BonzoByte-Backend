@@ -15,12 +15,14 @@ export function isPremium(u) {
 }
 
 export function shouldShowAds(u) {
-    if (u?.isAdmin) return false;
+    if (!u) return true;
+    if (u.isAdmin) return false;
+    if (u.ads?.enabled === false) return false;
     if (isPremium(u)) return false;
     if (hasActiveTrial(u)) return false;
     return true;
-}
-
+  }
+  
 export function getEntitlements(u) {
     const premium = isPremium(u);
     const trial = hasActiveTrial(u);

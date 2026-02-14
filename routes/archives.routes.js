@@ -3,6 +3,10 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { brotliDecompressSync } from 'zlib';
+import { canAccessFutureMatchDetails } from '../utils/entitlements.js';
+import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
+import { optionalAuth } from '../middleware/auth.middleware.js';
+import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 
 const router = Router();
@@ -137,22 +141,22 @@ async function fetchRemoteBrToBuffer(key) {
 
 async function r2GetObjectBufferWithMeta(key) {
     if (!s3) throw new Error("R2 S3 is not configured for reading");
-  
+
     try {
-      const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
-      if (!out?.Body) return null;
-  
-      const body = await streamToBuffer(out.Body);
-      return {
-        body,
-        contentType: out.ContentType ?? null,
-      };
+        const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
+        if (!out?.Body) return null;
+
+        const body = await streamToBuffer(out.Body);
+        return {
+            body,
+            contentType: out.ContentType ?? null,
+        };
     } catch (e) {
-      // 404 u AWS SDK obično dođe kao error -> samo vrati null
-      if (String(e?.name).includes("NoSuchKey") || e?.$metadata?.httpStatusCode === 404) return null;
-      return null; // ili throw ako želiš vidjeti realne greške
+        // 404 u AWS SDK obično dođe kao error -> samo vrati null
+        if (String(e?.name).includes("NoSuchKey") || e?.$metadata?.httpStatusCode === 404) return null;
+        return null; // ili throw ako želiš vidjeti realne greške
     }
-  }  
+}
 
 async function readArchiveBuffer(kind, name) {
     if (ARCHIVES_SOURCE === 'local') {
@@ -475,10 +479,10 @@ router.get('/matches/:id', async (req, res) => {
     }
 });
 
-// ✅ alias za frontend: /api/archives/match-details/:id  -> koristi isti handler kao /matches/:id
-router.get('/match-details/:id', async (req, res) => {
+// ✅ alias za frontend: /api/archives/match-details/:id
+router.get('/match-details/:id', optionalAuth, async (req, res) => {
     req.params.id = String(req.params.id || '').trim();
-    // samo pozovi isti kod kao u /matches/:id (dupliciramo 15 linija radi čistoće)
+
     try {
         const id = req.params.id;
         if (!/^\d{5,12}$/.test(id)) {
@@ -489,6 +493,23 @@ router.get('/match-details/:id', async (req, res) => {
         const rawBuf = brotliDecompressSync(brBuf);
         const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
 
+        const json = JSON.parse(text);
+
+        // ✅ derive start + finished iz details arhive
+        const expectedStartUtc = json?.m003; // npr "2024-03-08T00:10:00"
+        const isFinished = !!json?.m656;
+
+        // ✅ enforce lock only for unfinished
+        if (!isFinished) {
+            const user = req.user || null;
+
+            const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, 2);
+            if (!allowed) {
+                res.setHeader('Cache-Control', 'no-store');
+                return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, 2));
+            }
+        }
+
         if (String(req.query.download || '').toLowerCase() === '1') {
             res.setHeader('Content-Type', 'application/json; charset=utf-8');
             res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
@@ -496,7 +517,6 @@ router.get('/match-details/:id', async (req, res) => {
             return res.send(text);
         }
 
-        const json = JSON.parse(text);
         res.setHeader('Cache-Control', 'public, max-age=300');
         return res.json(json);
     } catch (e) {
@@ -504,6 +524,22 @@ router.get('/match-details/:id', async (req, res) => {
         return res.status(500).json({ message: 'Failed to read/decompress archive.' });
     }
 });
+
+function maybeDownload(req, res, id, text, json) {
+    if (String(req.query.download || '').toLowerCase() === '1') {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
+        return res.send(text);
+    }
+    return res.json(json);
+}
+
+export function optionalAuth(req, _res, next) {
+    const hdr = req.headers.authorization || '';
+    if (!hdr.startsWith('Bearer ')) return next();
+    // verify token, load user, set req.user
+    // on error -> next()
+}
 
 /* Local-only endpoints (Render remote mode neće imati te fajlove) */
 
