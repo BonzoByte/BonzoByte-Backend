@@ -565,7 +565,7 @@ router.get('/debug/lock/:id', async (req, res) => {
         const expectedStartUtc = json?.m003;
         const isFinished = !!json?.m656;
 
-        const now = getNow();
+        const now = new Date();
         const start = new Date(expectedStartUtc);
         const unlockAt = new Date(start.getTime() - DETAILS_LOCK_HOURS * 60 * 60 * 1000);
 
