@@ -517,43 +517,43 @@ router.get('/match-details/:id', optionalAuth, async (req, res) => {
 
 router.get('/debug/lock/:id', async (req, res) => {
     try {
-        const id = String(req.params.id || '').trim();
-        if (!/^\d{5,12}$/.test(id)) return res.status(400).json({ message: 'Invalid id format.' });
-
-        const brBuf = await readArchiveBuffer('match', id);
-        const rawBuf = brotliDecompressSync(brBuf);
-        const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
-        const json = JSON.parse(text);
-
-        const expectedStartUtc = json?.m003;
-        const isFinished = !!json?.m656;
-
-        const now = getNow();
-        const start = new Date(expectedStartUtc);
-        const unlockAt = new Date(start.getTime() - 2 * 60 * 60 * 1000);
-
-        const allowedAsGuest = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, 2);
-
-        res.setHeader('Cache-Control', 'no-store');
-        res.setHeader('X-BB-Debug', '1');
-
-        return res.json({
-            ok: true,
-            id,
-            forcedNowIso: process.env.ARCHIVES_NOW_ISO ?? null,
-            nowIso: now.toISOString(),
-            expectedStartUtc,
-            startIso: isNaN(start.getTime()) ? null : start.toISOString(),
-            unlockAtIso: isNaN(unlockAt.getTime()) ? null : unlockAt.toISOString(),
-            isFinished,
-            allowedAsGuest,
-            lockedResponseExample: buildDetailsLockedResponse(expectedStartUtc, 2),
-        });
+      const id = String(req.params.id || '').trim();
+      if (!/^\d{5,12}$/.test(id)) return res.status(400).json({ message: 'Invalid id format.' });
+  
+      const brBuf = await readArchiveBuffer('match', id);
+      const rawBuf = brotliDecompressSync(brBuf);
+      const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
+      const json = JSON.parse(text);
+  
+      const expectedStartUtc = json?.m003;
+      const isFinished = !!json?.m656;
+  
+      const now = getNow();
+      const start = new Date(expectedStartUtc);
+      const unlockAt = new Date(start.getTime() - 2 * 60 * 60 * 1000);
+  
+      const allowedAsGuest = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, 2);
+  
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-BB-Debug', '1');
+  
+      return res.json({
+        ok: true,
+        id,
+        forcedNowIso: process.env.ARCHIVES_NOW_ISO ?? null,
+        nowIso: now.toISOString(),
+        expectedStartUtc,
+        startIso: isNaN(start.getTime()) ? null : start.toISOString(),
+        unlockAtIso: isNaN(unlockAt.getTime()) ? null : unlockAt.toISOString(),
+        isFinished,
+        allowedAsGuest,
+        lockedResponseExample: buildDetailsLockedResponse(expectedStartUtc, 2),
+      });
     } catch (e) {
-        console.error('debug lock error', e);
-        return res.status(500).json({ message: 'debug lock failed' });
+      console.error('debug lock error', e);
+      return res.status(500).json({ message: 'debug lock failed' });
     }
-});
+  });  
 
 function maybeDownload(req, res, id, text, json) {
     if (String(req.query.download || '').toLowerCase() === '1') {
