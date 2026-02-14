@@ -296,10 +296,10 @@ async function getDailyDateRange() {
 }
 
 async function serveMatchDetails(req, res) {
-    const id = String(req.params.id || '').trim();
-    if (!/^\d{5,12}$/.test(id)) {
-        return res.status(400).json({ message: 'Invalid id format.' });
-    }
+    const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, DETAILS_LOCK_HOURS);
+    if (!allowed) {
+      return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, DETAILS_LOCK_HOURS));
+    }    
 
     const brBuf = await readArchiveBuffer('match', id);
     const rawBuf = brotliDecompressSync(brBuf);
@@ -312,12 +312,12 @@ async function serveMatchDetails(req, res) {
 
     if (!isFinished) {
         const user = req.user || null;
-        const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, 2);
+        const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, DETAILS_LOCK_HOURS);
 
         if (!allowed) {
             res.setHeader('Cache-Control', 'no-store');
             res.setHeader('X-BB-Route', 'match-details');
-            return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, 2));
+            return res.status(423).json(buildDetailsLockedResponse(user, expectedStartUtc, DETAILS_LOCK_HOURS));
         }
     }
 
@@ -533,15 +533,9 @@ router.get('/match-details/:id', optionalAuth, async (req, res) => {
   
       if (!isFinished) {
         const user = req.user || null;
-        const lockHours = 2;
-  
-        const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, lockHours);
-        if (!allowed) {
-          res.setHeader('Cache-Control', 'no-store');
-          res.setHeader('X-BB-Guard', '1');
-          return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, lockHours));
-        }
       }
+
+      const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 2);
   
       if (String(req.query.download || '').toLowerCase() === '1') {
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -573,7 +567,7 @@ router.get('/debug/lock/:id', async (req, res) => {
 
         const now = getNow();
         const start = new Date(expectedStartUtc);
-        const unlockAt = new Date(start.getTime() - 2 * 60 * 60 * 1000);
+        const unlockAt = new Date(start.getTime() - DETAILS_LOCK_HOURS * 60 * 60 * 1000);
 
         const allowedAsGuest = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, 2);
 
