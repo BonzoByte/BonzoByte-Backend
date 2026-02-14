@@ -2,11 +2,13 @@
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { brotliDecompressSync } from 'zlib';
+import zlib, { brotliDecompressSync } from 'zlib';
+
+import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+
 import { canAccessFutureMatchDetails } from '../utils/entitlements.js';
 import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { optionalAuth } from '../middleware/auth.middleware.js';
-import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getNowDebug } from '../utils/now.js';
 import { env } from '../config/env.js';
 
@@ -15,6 +17,7 @@ const router = Router();
 /* ----------------------------- Helpers ----------------------------- */
 
 const FIGURE_SPACE = '\u2007';
+
 const fmtNum = (val, digitsBefore = 3, decimals = 2) => {
     if (val == null || !isFinite(val)) return '';
     const s = Number(val).toFixed(decimals);
@@ -73,14 +76,8 @@ const dashPairAligned = (a, b, decimals = 2) => {
 const yyyymmddToIso = (yyyymmdd) =>
     `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
 
-const lockHours = env.DETAILS_LOCK_HOURS ?? 2;
-
-const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, lockHours);
-if (!allowed) {
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-BB-Guard', '1');
-    return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, lockHours));
-}
+// ✅ jedini “global” lock param — nema nikakvog res/return na top-levelu
+const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 2);
 
 /* ------------------------------ Config ----------------------------- */
 
@@ -150,7 +147,7 @@ async function fetchRemoteBrToBuffer(key) {
 }
 
 async function r2GetObjectBufferWithMeta(key) {
-    if (!s3) throw new Error("R2 S3 is not configured for reading");
+    if (!s3) throw new Error('R2 S3 is not configured for reading');
 
     try {
         const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
@@ -162,9 +159,8 @@ async function r2GetObjectBufferWithMeta(key) {
             contentType: out.ContentType ?? null,
         };
     } catch (e) {
-        // 404 u AWS SDK obično dođe kao error -> samo vrati null
-        if (String(e?.name).includes("NoSuchKey") || e?.$metadata?.httpStatusCode === 404) return null;
-        return null; // ili throw ako želiš vidjeti realne greške
+        if (String(e?.name || '').includes('NoSuchKey') || e?.$metadata?.httpStatusCode === 404) return null;
+        return null;
     }
 }
 
@@ -254,7 +250,6 @@ async function getLatestIndexFile(entity) {
 }
 
 async function readIndexBuffer(entity, file) {
-    // entity: 'players' | 'tournaments'
     const safe = String(file || '').trim();
     if (!safe || safe.includes('..') || safe.includes('/') || safe.includes('\\')) {
         const err = new Error('Invalid index file name.');
@@ -278,14 +273,6 @@ async function readIndexBuffer(entity, file) {
     return await fetchRemoteBrToBuffer(key);
 }
 
-async function buildManifest(entity) {
-    const files = await listIndexBrFiles(entity);
-    if (!files.length) return { entity, count: 0, latest: null, files: [] };
-
-    const latest = files[files.length - 1]; // asc sort -> zadnji je najnoviji po imenu (ako verzija u nazivu raste)
-    return { entity, count: files.length, latest, files };
-}
-
 async function getDailyDateRange() {
     const br = await listDailyBrFiles();
     if (!br.length) return null;
@@ -295,19 +282,49 @@ async function getDailyDateRange() {
     return { minDate: yyyymmddToIso(first), maxDate: yyyymmddToIso(last) };
 }
 
+function extractVersionFromIndexFile(file) {
+    const m = String(file || '').match(/\.(v\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z)\.br$/i);
+    return m ? m[1] : '';
+}
+
+async function headRemote(key) {
+    if (!s3) throw new Error('R2 S3 is not configured');
+    const out = await s3.send(new HeadObjectCommand({ Bucket: R2.bucket, Key: key }));
+    return {
+        key,
+        size: out.ContentLength ?? null,
+        lastModified: out.LastModified ? new Date(out.LastModified).toISOString() : null,
+        contentType: out.ContentType ?? null,
+        etag: out.ETag ?? null,
+    };
+}
+
+async function r2GetObjectBuffer(key) {
+    if (ARCHIVES_SOURCE !== 'remote') return null;
+    try {
+        return await fetchRemoteBrToBuffer(key);
+    } catch (e) {
+        const name = String(e?.name || '');
+        const status = e?.$metadata?.httpStatusCode;
+        if (name === 'NoSuchKey' || status === 404) return null;
+        throw e;
+    }
+}
+
+/* ----------------------- Match details (guard) ---------------------- */
+
 async function serveMatchDetails(req, res) {
-    const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, DETAILS_LOCK_HOURS);
-    if (!allowed) {
-      return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, DETAILS_LOCK_HOURS));
-    }    
+    const id = String(req.params.id || '').trim();
+    if (!/^\d{5,12}$/.test(id)) {
+        return res.status(400).json({ message: 'Invalid id format.' });
+    }
 
     const brBuf = await readArchiveBuffer('match', id);
     const rawBuf = brotliDecompressSync(brBuf);
     const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
-
     const json = JSON.parse(text);
 
-    const expectedStartUtc = json?.m003;
+    const expectedStartUtc = json?.m003; // "YYYY-MM-DDTHH:mm:ss.sssZ"
     const isFinished = !!json?.m656;
 
     if (!isFinished) {
@@ -316,8 +333,9 @@ async function serveMatchDetails(req, res) {
 
         if (!allowed) {
             res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('X-BB-Guard', '1');
             res.setHeader('X-BB-Route', 'match-details');
-            return res.status(423).json(buildDetailsLockedResponse(user, expectedStartUtc, DETAILS_LOCK_HOURS));
+            return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, DETAILS_LOCK_HOURS));
         }
     }
 
@@ -339,6 +357,7 @@ async function serveMatchDetails(req, res) {
 router.get('/_debug/config', (_req, res) => {
     res.json({
         ARCHIVES_SOURCE,
+        DETAILS_LOCK_HOURS,
         R2: {
             bucket: R2.bucket,
             endpoint: R2.endpoint,
@@ -434,7 +453,7 @@ router.get('/available-dates', async (_req, res) => {
     }
 });
 
-// Angular: /daily/index.json
+// Angular legacy: /daily/index.json
 router.get('/daily/index.json', async (_req, res) => {
     try {
         const range = await getDailyDateRange();
@@ -505,7 +524,7 @@ router.get('/daily/:date', async (req, res) => {
     }
 });
 
-// ✅ legacy: /api/archives/matches/:id (guarded!)
+// ✅ legacy: /api/archives/matches/:id (guarded)
 router.get('/matches/:id', optionalAuth, async (req, res) => {
     try {
         return await serveMatchDetails(req, res);
@@ -515,43 +534,17 @@ router.get('/matches/:id', optionalAuth, async (req, res) => {
     }
 });
 
-// ✅ frontend alias: /api/archives/match-details/:id (guarded!)
+// ✅ frontend alias: /api/archives/match-details/:id (guarded)
 router.get('/match-details/:id', optionalAuth, async (req, res) => {
     try {
-      const id = String(req.params.id || '').trim();
-      if (!/^\d{5,12}$/.test(id)) {
-        return res.status(400).json({ message: 'Invalid id format.' });
-      }
-  
-      const brBuf = await readArchiveBuffer('match', id);
-      const rawBuf = brotliDecompressSync(brBuf);
-      const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
-      const json = JSON.parse(text);
-  
-      const expectedStartUtc = json?.m003;     // npr. "2016-01-04T10:30:00"
-      const isFinished = !!json?.m656;
-  
-      if (!isFinished) {
-        const user = req.user || null;
-      }
-
-      const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 2);
-  
-      if (String(req.query.download || '').toLowerCase() === '1') {
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.send(text);
-      }
-  
-      res.setHeader('Cache-Control', 'public, max-age=300');
-      return res.json(json);
+        return await serveMatchDetails(req, res);
     } catch (e) {
-      console.error('❌ /archives/match-details error:', e);
-      return res.status(500).json({ message: 'Failed to read/decompress archive.' });
+        console.error('❌ /archives/match-details error:', e);
+        return res.status(500).json({ message: 'Failed to read/decompress archive.' });
     }
-  });  
+});
 
+// debug: pokaži lock izračun
 router.get('/debug/lock/:id', async (req, res) => {
     try {
         const id = String(req.params.id || '').trim();
@@ -569,7 +562,7 @@ router.get('/debug/lock/:id', async (req, res) => {
         const start = new Date(expectedStartUtc);
         const unlockAt = new Date(start.getTime() - DETAILS_LOCK_HOURS * 60 * 60 * 1000);
 
-        const allowedAsGuest = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, 2);
+        const allowedAsGuest = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, DETAILS_LOCK_HOURS);
 
         res.setHeader('Cache-Control', 'no-store');
         res.setHeader('X-BB-Debug', '1');
@@ -577,14 +570,14 @@ router.get('/debug/lock/:id', async (req, res) => {
         return res.json({
             ok: true,
             id,
-            forcedNowIso: process.env.ARCHIVES_NOW_ISO ?? null,
             nowIso: now.toISOString(),
             expectedStartUtc,
             startIso: isNaN(start.getTime()) ? null : start.toISOString(),
             unlockAtIso: isNaN(unlockAt.getTime()) ? null : unlockAt.toISOString(),
             isFinished,
+            lockHours: DETAILS_LOCK_HOURS,
             allowedAsGuest,
-            lockedResponseExample: buildDetailsLockedResponse(expectedStartUtc, 2),
+            lockedResponseExample: buildDetailsLockedResponse(expectedStartUtc, DETAILS_LOCK_HOURS),
         });
     } catch (e) {
         console.error('debug lock error', e);
@@ -592,45 +585,34 @@ router.get('/debug/lock/:id', async (req, res) => {
     }
 });
 
-function maybeDownload(req, res, id, text, json) {
-    if (String(req.query.download || '').toLowerCase() === '1') {
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
-        return res.send(text);
-    }
-    return res.json(json);
-}
+/* --------------------- TrueSkill (players/ts) ---------------------- */
 
-/* Local-only endpoints (Render remote mode neće imati te fajlove) */
-
-import zlib from "zlib";
-
-router.get("/ts/:playerTPId", async (req, res) => {
+router.get('/ts/:playerTPId', async (req, res) => {
     try {
-        const id = req.params.playerTPId;
+        const id = String(req.params.playerTPId || '').trim();
         const key = `players/ts/${id}.br`;
 
-        console.log('[ts] key:', key);
-
         const brBuffer = await r2GetObjectBuffer(key);
-        if (!brBuffer) return res.status(404).json({ ok: false, reason: "missing" });
+        if (!brBuffer) return res.status(404).json({ ok: false, reason: 'missing' });
 
         const jsonBuffer = zlib.brotliDecompressSync(brBuffer);
-        const data = JSON.parse(jsonBuffer.toString("utf-8"));
+        const data = JSON.parse(jsonBuffer.toString('utf-8'));
 
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader("Cache-Control", "public, max-age=3600");
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
         res.json({ ok: true, playerTPId: Number(id), data });
     } catch (e) {
-        console.error("[ts] error:", e);
+        console.error('[ts] error:', e);
         res.status(500).json({ ok: false });
     }
 });
 
+/* ------------------ Players/Tournaments index manifests ------------- */
+
 // GET /api/archives/players/manifest
 router.get('/players/manifest', async (_req, res, next) => {
     try {
-        const range = await getDailyDateRange(); // već postoji u tvom fileu
+        const range = await getDailyDateRange();
         const latest = await getLatestIndexFile('players');
 
         if (!range) return res.status(404).json({ message: 'No daily archives found.' });
@@ -638,7 +620,6 @@ router.get('/players/manifest', async (_req, res, next) => {
 
         const version = extractVersionFromIndexFile(latest);
 
-        // DailyManifest shape
         res.setHeader('Cache-Control', 'public, max-age=300');
         return res.json({
             minDate: range.minDate,
@@ -646,7 +627,7 @@ router.get('/players/manifest', async (_req, res, next) => {
             generatedAtUtc: new Date().toISOString(),
             players: {
                 version: version || latest,
-                url: latest,              // <-- frontend očekuje samo filename
+                url: latest, // filename
                 contentType: 'application/octet-stream',
             },
         });
@@ -658,8 +639,8 @@ router.get('/players/manifest', async (_req, res, next) => {
 router.get('/players/index/:file', async (req, res, next) => {
     try {
         const file = String(req.params.file || '').trim();
+        const brBuf = await readIndexBuffer('players', file);
 
-        const brBuf = await readIndexBuffer('players', file); // čita lokalno ili s R2
         res.setHeader('Cache-Control', 'public, max-age=300');
         res.setHeader('Content-Type', 'application/octet-stream');
         return res.send(brBuf);
@@ -679,7 +660,6 @@ router.get('/tournaments/manifest', async (_req, res, next) => {
 
         const version = extractVersionFromIndexFile(latest);
 
-        // DailyManifestTournaments shape
         res.setHeader('Cache-Control', 'public, max-age=300');
         return res.json({
             minDate: range.minDate,
@@ -690,7 +670,7 @@ router.get('/tournaments/manifest', async (_req, res, next) => {
                 url: latest,
                 contentType: 'application/octet-stream',
             },
-            tournamentStrength: null, // za sad, dok ne dodamo remote strength index
+            tournamentStrength: null,
         });
     } catch (e) {
         next(e);
@@ -700,8 +680,8 @@ router.get('/tournaments/manifest', async (_req, res, next) => {
 router.get('/tournaments/index/:file', async (req, res, next) => {
     try {
         const file = String(req.params.file || '').trim();
-
         const brBuf = await readIndexBuffer('tournaments', file);
+
         res.setHeader('Cache-Control', 'public, max-age=300');
         res.setHeader('Content-Type', 'application/octet-stream');
         return res.send(brBuf);
@@ -710,11 +690,13 @@ router.get('/tournaments/index/:file', async (req, res, next) => {
     }
 });
 
+/* ----------------------------- Status ------------------------------ */
+
 router.get('/status', async (_req, res, next) => {
     try {
-        const range = await getDailyDateRange(); // već postoji
+        const range = await getDailyDateRange();
         const latestDaily = await (async () => {
-            const br = await listDailyBrFiles(); // već postoji
+            const br = await listDailyBrFiles();
             if (!br.length) return null;
             br.sort((a, b) => b.localeCompare(a));
             return br[0].replace(/\.br$/i, '');
@@ -743,12 +725,9 @@ router.get('/status', async (_req, res, next) => {
             nowUtc: new Date().toISOString(),
         };
 
-        // Remote: napravi 2-3 HEAD provjere da odmah znamo da objekt stvarno postoji
         if (ARCHIVES_SOURCE === 'remote') {
             const checks = [];
-
             if (latestDaily) checks.push(headRemote(`daily/${latestDaily}.br`));
-            // matches sample: uzmi 1 key iz matches/ ako želiš, ali je skuplje listati.
             if (latestPlayersIndex) checks.push(headRemote(`players/indexBuild/${latestPlayersIndex}`));
             if (latestTournamentsIndex) checks.push(headRemote(`tournaments/indexBuild/${latestTournamentsIndex}`));
 
@@ -764,18 +743,20 @@ router.get('/status', async (_req, res, next) => {
     }
 });
 
-// /api/archives/players/photo/:playerTPId
-router.get("/players/photo/:id", async (req, res) => {
-    try {
-        const id = String(req.params.id || "").trim();
+/* --------------------------- Players photo -------------------------- */
 
-        // "photoM.jpg" / "photoW.jpg" -> direktno serve
-        if (id === "photoM.jpg" || id === "photoW.jpg") {
+router.get('/players/photo/:id', async (req, res) => {
+    try {
+        const id = String(req.params.id || '').trim();
+
+        // "photoM.jpg" / "photoW.jpg"
+        if (id === 'photoM.jpg' || id === 'photoW.jpg') {
             const key = `players/photo/${id}`;
-            const found = await r2GetObjectBufferWithMeta(key); // vidi helper niže
+            const found = await r2GetObjectBufferWithMeta(key);
             if (!found) return res.status(404).end();
-            res.setHeader("Content-Type", found.contentType ?? "image/jpeg");
-            res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+
+            res.setHeader('Content-Type', found.contentType ?? 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
             return res.send(found.body);
         }
 
@@ -784,82 +765,17 @@ router.get("/players/photo/:id", async (req, res) => {
         const found = await r2GetObjectBufferWithMeta(key);
 
         if (!found) {
-            // fallback: ako player nema sliku, vrati default (ovdje biramo W/M po prefiksu ili query paramu)
-            // Najbolje: frontend pošalje ?g=W ili ?g=M
-            const g = String(req.query.g || "M").toUpperCase() === "W" ? "W" : "M";
+            const g = String(req.query.g || 'M').toUpperCase() === 'W' ? 'W' : 'M';
             return res.redirect(302, `/api/archives/players/photo/photo${g}.jpg`);
         }
 
-        res.setHeader("Content-Type", found.contentType ?? "image/jpeg");
-        res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+        res.setHeader('Content-Type', found.contentType ?? 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
         return res.send(found.body);
     } catch (e) {
-        console.error("players/photo failed", e);
+        console.error('players/photo failed', e);
         return res.status(500).json({ ok: false });
     }
 });
-
-function extractVersionFromIndexFile(file) {
-    // players.index.v2026-01-22T19-35Z.br -> v2026-01-22T19-35Z
-    const m = String(file || '').match(/\.(v\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z)\.br$/i);
-    return m ? m[1] : '';
-}
-
-async function headRemote(key) {
-    if (!s3) throw new Error('R2 S3 is not configured');
-    const out = await s3.send(new HeadObjectCommand({ Bucket: R2.bucket, Key: key }));
-    return {
-        key,
-        size: out.ContentLength ?? null,
-        lastModified: out.LastModified ? new Date(out.LastModified).toISOString() : null,
-        contentType: out.ContentType ?? null,
-        etag: out.ETag ?? null,
-    };
-}
-
-function isNotFound(err) {
-    const name = err?.name || '';
-    const code = err?.Code || err?.code || err?.$metadata?.httpStatusCode;
-    const http = err?.$metadata?.httpStatusCode;
-
-    return (
-        http === 404 ||
-        code === 404 ||
-        code === 'NotFound' ||
-        code === 'NoSuchKey' ||
-        name === 'NoSuchKey' ||
-        name === 'NotFound'
-    );
-}
-
-async function getRemoteObject(key) {
-    if (!s3) throw new Error('R2 S3 is not configured');
-
-    const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
-    if (!out?.Body) throw new Error(`Empty body for key: ${key}`);
-
-    const body = await streamToBuffer(out.Body);
-    return {
-        key,
-        body, // Buffer
-        contentType: out.ContentType ?? null,
-        etag: out.ETag ?? null,
-    };
-}
-
-async function r2GetObjectBuffer(key) {
-    if (ARCHIVES_SOURCE !== 'remote') return null; // (ili implementiraj local ako želiš)
-    try {
-        return await fetchRemoteBrToBuffer(key);
-    } catch (e) {
-        // Ako objekt ne postoji, AWS SDK baca grešku tipa NoSuchKey / 404.
-        // Mi to tretiramo kao "not found", ne kao 500.
-        const name = String(e?.name || '');
-        const status = e?.$metadata?.httpStatusCode;
-
-        if (name === 'NoSuchKey' || status === 404) return null;
-        throw e; // ostalo je pravi fail
-    }
-}
 
 export default router;
