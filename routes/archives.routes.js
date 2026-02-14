@@ -8,6 +8,7 @@ import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { optionalAuth } from '../middleware/auth.middleware.js';
 import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { getNowDebug } from '../utils/now.js';
 
 const router = Router();
 
@@ -298,6 +299,11 @@ router.get('/_debug/config', (_req, res) => {
             s3Enabled: !!s3,
         },
     });
+});
+
+router.get('/debug/now', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, ...getNowDebug() });
 });
 
 router.get('/_debug/r2-list', async (req, res, next) => {

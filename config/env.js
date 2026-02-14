@@ -51,3 +51,4 @@ if (!parsed.success) {
 export const env = parsed.data;
 export const corsAllowlist = env.CORS_ORIGINS.split(',').map((s) => s.trim());
 export const frontendUrl = env.FRONTEND_URL;
+export const ARCHIVES_NOW_ISO = '2016-01-04T12:00:00';

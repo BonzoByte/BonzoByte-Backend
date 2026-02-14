@@ -1,3 +1,5 @@
+import { getNow } from './now.js';
+
 export function hasActiveTrial(u) {
     const ends = u?.trial?.endsAt ? new Date(u.trial.endsAt) : null;
     return Boolean(ends && ends > new Date());
@@ -21,8 +23,8 @@ export function shouldShowAds(u) {
     if (isPremium(u)) return false;
     if (hasActiveTrial(u)) return false;
     return true;
-  }
-  
+}
+
 export function getEntitlements(u) {
     const premium = isPremium(u);
     const trial = hasActiveTrial(u);
@@ -43,5 +45,5 @@ export function canAccessFutureMatchDetails(u, expectedStartUtc, lockHours = 2) 
 
     const start = new Date(expectedStartUtc);
     const unlockAt = new Date(start.getTime() - lockHours * 60 * 60 * 1000);
-    return new Date() >= unlockAt;
-}  
+    return getNow() >= unlockAt;
+}
