@@ -16,7 +16,6 @@ export default async function sendVerificationEmail(toEmail, user, token) {
       <p><a href="${verifyUrl}">Verify my email</a></p>
       <p>Or copy & paste:<br/>
         <code style="word-break:break-all">${verifyUrl}</code>
-      </p>
-    `,
+      </p>`,
   });
 }
