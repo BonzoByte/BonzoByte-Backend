@@ -40,6 +40,14 @@ export function getEntitlements(u) {
 
 // future match details lock: 2h before start (as agreed)
 export function canAccessFutureMatchDetails(u, expectedStartUtc, lockHours = 2) {
+    // ✅ DEV/TEST: force lock (for UI testing)
+    const forceLock =
+        String(process.env.DETAILS_LOCK_TEST_MODE || '').toLowerCase() === 'true' ||
+        String(process.env.DETAILS_LOCK_TEST_MODE || '') === '1';
+
+    if (forceLock) return false;
+
+    // privileged -> always allowed
     if (u?.isAdmin) return true;
     if (isPremium(u) || hasActiveTrial(u)) return true;
 

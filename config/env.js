@@ -17,6 +17,9 @@ const Env = z.object({
     JWT_SECRET: archivesOnly ? z.string().optional() : z.string().min(16),
     JWT_EXPIRES_IN: z.string().default('1d'),
     JWT_VERIFICATION_EXPIRES_IN: z.string().default('1h'),
+    DETAILS_LOCK_TEST_MODE: z.string().optional(),
+    DETAILS_LOCK_TEST_MODE: z.string().optional(),
+    NOW_OVERRIDE_ISO: z.string().optional(),
 
     DETAILS_LOCK_HOURS: z.coerce
         .number()

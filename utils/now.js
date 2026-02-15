@@ -1,21 +1,8 @@
 export function getNow() {
-    const forced = process.env.ARCHIVES_NOW_ISO;
-    if (!forced) return new Date();
-
-    const d = new Date(forced);
-    if (isNaN(d.getTime())) return new Date();
-    return d;
+    const iso = String(process.env.NOW_OVERRIDE_ISO || '').trim();
+    if (iso) {
+        const d = new Date(iso);
+        if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
 }
-
-export function getNowDebug() {
-    const forced = process.env.ARCHIVES_NOW_ISO || null;
-    const real = new Date();
-    const used = getNow();
-
-    return {
-        realNowIso: real.toISOString(),
-        forcedNowIso: forced,
-        usedNowIso: used.toISOString(),
-        isForced: !!forced,
-    };
-}  
