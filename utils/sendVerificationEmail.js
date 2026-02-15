@@ -1,16 +1,20 @@
 import transporter from './mailer.js';
 import { env } from '../config/env.js';
 
-const FRONTEND_URL = env.FRONTEND_URL || 'http://localhost:4200';
-
 export default async function sendVerificationEmail(toEmail, user, token) {
-  const verifyUrl = `${FRONTEND_URL}/verify?token=${encodeURIComponent(token)}`;
+  const frontendUrl = env.FRONTEND_URL || 'http://localhost:4200';
+  const verifyUrl = `${frontendUrl}/verify?token=${encodeURIComponent(token)}`;
 
-  console.log('[MAIL] verification sending to:', toEmail);
+  // ✅ From MUST match SMTP account (anti-spoof / DMARC)
+  const fromAddress = env.EMAIL_USER; // npr. tvoj Gmail ili pravi SMTP user
+  if (!fromAddress) {
+    throw new Error('[MAIL] EMAIL_USER is missing (cannot send verification email).');
+  }
 
   const info = await transporter.sendMail({
     to: toEmail,
-    from: `"BonzoByte" <${process.env.EMAIL_USER}>`,
+    from: `"BonzoByte" <${fromAddress}>`,
+    replyTo: `"BonzoByte" <${fromAddress}>`,
     subject: 'Verify your email',
     text: `Hi ${user?.name || ''}\n\nClick to verify: ${verifyUrl}`,
     html: `
@@ -22,11 +26,11 @@ export default async function sendVerificationEmail(toEmail, user, token) {
       </p>`,
   });
 
-  console.log('[MAIL] verification sent:', {
+  console.log('[MAIL] Verification sent', {
+    to: toEmail,
     messageId: info?.messageId,
     accepted: info?.accepted,
     rejected: info?.rejected,
-    response: info?.response,
   });
 
   return info;

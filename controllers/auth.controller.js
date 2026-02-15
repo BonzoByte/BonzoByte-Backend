@@ -113,16 +113,22 @@ export const registerUser = async (req, res) => {
       ads: { enabled: true, disabledReason: 'trial' },
     });
 
-    const verificationToken = generateVerificationToken(user._id);
 
     // ✅ BEST EFFORT mail (ne smije blokirati response)
     try {
+      let mailOk = false;
+      let mailError = null;
+
+      const verificationToken = generateVerificationToken(user._id);
       await sendVerificationEmail(user.email, user, verificationToken);
+      mailOk = true;
       return res.status(201).json({
         status: 'ok',
         message: 'Registration successful. Please check your email to verify your account.',
       });
     } catch (mailErr) {
+      mailError = e?.message || 'MAIL_SEND_FAILED';
+      console.error('[REGISTER] Verification email failed:', e);
       console.error('[REGISTER] verification email failed AFTER user creation:', {
         message: mailErr?.message,
         code: mailErr?.code,
