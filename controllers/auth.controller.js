@@ -15,7 +15,7 @@ const handleError = (res, statusCode, message) => {
   return res.status(statusCode).json({ message });
 };
 
-// ✅ REGISTER (robust: user se kreira i ako mail padne)
+// ✅ REGISTER (auto-login; optional auto-verify when EMAIL_DISABLED=1)
 // - sends verification email (best effort)
 // - NEVER blocks response if mail fails (prevents frontend "Registering..." forever)
 export const registerUser = async (req, res) => {
@@ -34,39 +34,8 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    // 🔥 uzmi password iako je select:false u schemi (treba nam za detekciju local vs oauth)
     const existingByEmail = await User.findOne({ email: normalizedEmail }).select('+password');
-
     if (existingByEmail) {
-      // OAuth user bez local passworda -> postavi password + pošalji verifikaciju (best effort)
-      if (!existingByEmail.password) {
-        existingByEmail.password = password; // plaintext -> pre-save hook hashira
-
-        if (normalizedNickname && !existingByEmail.nickname) existingByEmail.nickname = normalizedNickname;
-        if (normalizedName && !existingByEmail.name) existingByEmail.name = normalizedName;
-
-        if (!Array.isArray(existingByEmail.provider)) existingByEmail.provider = [];
-        if (!existingByEmail.provider.includes('local')) existingByEmail.provider.push('local');
-
-        await existingByEmail.save();
-
-        const verificationToken = generateVerificationToken(existingByEmail._id);
-
-        // ✅ fire-and-forget (NE čekamo)
-        sendVerificationEmail(existingByEmail.email, existingByEmail, verificationToken)
-          .then(() => console.log('[REGISTER] Verification email sent (existing oauth user):', existingByEmail.email))
-          .catch((err) =>
-            console.warn('[REGISTER] Verification email failed (existing oauth user):', err?.message || err)
-          );
-
-        return res.status(200).json({
-          status: 'ok',
-          message: 'Registration successful. Please check your email to verify your account.',
-          emailStatus: 'queued',
-        });
-      }
-
-      // ✅ normalan user već postoji -> error (NE 201 OK)
       return res.status(400).json({
         status: 'error',
         code: 'EMAIL_ALREADY_EXISTS',
@@ -74,7 +43,6 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    // nickname unique (ako je poslan)
     if (normalizedNickname) {
       const existingByNickname = await User.findOne({ nickname: normalizedNickname });
       if (existingByNickname) {
@@ -86,16 +54,21 @@ export const registerUser = async (req, res) => {
       }
     }
 
+    const emailDisabled = String(process.env.EMAIL_DISABLED || '') === '1';
+
     const user = await User.create({
       email: normalizedEmail,
-      password, // plaintext -> hook hashira
+      password,
       nickname: normalizedNickname || undefined,
       name: normalizedName || normalizedNickname || normalizedEmail.split('@')[0],
       country,
       provider: ['local'],
       createdVia: 'manual',
-      isUser: false,
-      isVerified: false,
+
+      // ✅ dok nema maila: auto-verify
+      isVerified: emailDisabled ? true : false,
+      isUser: emailDisabled ? true : false,
+
       trial: {
         endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         grantedDaysTotal: 7,
@@ -104,53 +77,50 @@ export const registerUser = async (req, res) => {
       ads: { enabled: true, disabledReason: 'trial' },
     });
 
-    const emailVerificationEnabled = String(process.env.EMAIL_VERIFICATION_ENABLED || '0') === '1';
-
-    if (emailVerificationEnabled) {
-      // generate token + send email (fire-and-forget kasnije)
-    } else {
-      user.isVerified = true;
-      user.isUser = true;
-      await user.save();
+    // ✅ samo ako mail radi
+    if (!emailDisabled) {
+      try {
+        const verificationToken = generateVerificationToken(user._id);
+        await sendVerificationEmail(user.email, user, verificationToken);
+      } catch (err) {
+        console.error('[REGISTER] Verification email failed (new user):', err);
+        // ne rušimo registraciju
+      }
     }
 
-    const verificationToken = generateVerificationToken(user._id);
-
-    // ✅ fire-and-forget (NE čekamo)
-    sendVerificationEmail(user.email, user, verificationToken)
-      .then(() => console.log('[REGISTER] Verification email sent (new user):', user.email))
-      .catch((err) => console.warn('[REGISTER] Verification email failed (new user):', err?.message || err));
+    // ✅ auto-login: vrati token + user
+    const token = jwt.sign(
+      { id: user._id.toString() },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
+    );
 
     return res.status(201).json({
       status: 'ok',
-      message: 'Registration successful. Please check your email to verify your account.',
-      emailStatus: 'queued',
+      message: emailDisabled
+        ? 'Registration successful. You are now logged in.'
+        : 'Registration successful. Please check your email to verify your account.',
+      token,
+      user: {
+        _id: user._id.toString(),
+        email: user.email,
+        name: user.name,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl ?? null,
+        isAdmin: !!user.isAdmin,
+        isUser: !!user.isUser,
+        isVerified: !!user.isVerified,
+        provider: Array.isArray(user.provider) ? user.provider : [],
+        entitlements: getEntitlements(user),
+      }
     });
   } catch (error) {
-    // Mongo duplicate key
     if (error?.code === 11000) {
       const key = Object.keys(error.keyPattern || {})[0];
-
-      if (key === 'email') {
-        return res.status(400).json({
-          status: 'error',
-          code: 'EMAIL_ALREADY_EXISTS',
-          message: 'Email is already registered.',
-        });
-      }
-
-      if (key === 'nickname') {
-        return res.status(400).json({
-          status: 'error',
-          code: 'NICKNAME_ALREADY_EXISTS',
-          message: 'Nickname is already taken.',
-        });
-      }
-
       return res.status(400).json({
         status: 'error',
-        code: 'DUPLICATE_KEY',
-        message: 'Duplicate value.',
+        code: key === 'nickname' ? 'NICKNAME_ALREADY_EXISTS' : 'EMAIL_ALREADY_EXISTS',
+        message: key === 'nickname' ? 'Nickname is already taken.' : 'Email is already registered.',
       });
     }
 
