@@ -3,6 +3,8 @@ import nodemailer from 'nodemailer';
 const host = process.env.SMTP_HOST || 'smtp.gmail.com';
 const port = Number(process.env.SMTP_PORT || 465);
 
+console.log('[MAILER] host=', process.env.SMTP_HOST, 'port=', process.env.SMTP_PORT, 'secure=', process.env.SMTP_SECURE);
+
 // ako SMTP_SECURE nije eksplicitno setan, default je TRUE samo za 465
 const secure =
     typeof process.env.SMTP_SECURE === 'string'
