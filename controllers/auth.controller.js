@@ -478,7 +478,7 @@ export const contactUs = asyncHandler(async (req, res) => {
   const TO =
     process.env.SUPPORT_EMAIL ||
     process.env.CONTACT_TO ||
-    process.env.SMTP_USER ||
+    process.env.EMAIL_USER ||
     'bonzobyte@gmail.com';
 
   if (!TO) {
@@ -491,7 +491,7 @@ export const contactUs = asyncHandler(async (req, res) => {
   try {
     await transporter.sendMail({
       to: TO,
-      from: `"BonzoByte Contact" <${process.env.SMTP_USER || TO}>`,
+      from: `"BonzoByte Contact" <${process.env.EMAIL_USER || TO}>`,
       replyTo: `${name} <${email}>`,
       subject: `Contact form — ${name} <${email}>`,
       text: message,
