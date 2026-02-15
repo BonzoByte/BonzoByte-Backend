@@ -509,7 +509,6 @@ export const contactUs = asyncHandler(async (req, res) => {
   }
 });
 
-
 export const updateUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
