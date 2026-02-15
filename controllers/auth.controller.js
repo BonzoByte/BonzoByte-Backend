@@ -104,6 +104,16 @@ export const registerUser = async (req, res) => {
       ads: { enabled: true, disabledReason: 'trial' },
     });
 
+    const emailVerificationEnabled = String(process.env.EMAIL_VERIFICATION_ENABLED || '0') === '1';
+
+    if (emailVerificationEnabled) {
+      // generate token + send email (fire-and-forget kasnije)
+    } else {
+      user.isVerified = true;
+      user.isUser = true;
+      await user.save();
+    }
+
     const verificationToken = generateVerificationToken(user._id);
 
     // ✅ fire-and-forget (NE čekamo)
