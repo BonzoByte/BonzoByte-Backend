@@ -18,7 +18,7 @@ export async function sendMail({ to, subject, text, html, from, replyTo }) {
         from ||
         env.EMAIL_FROM ||
         process.env.EMAIL_FROM ||
-        'onboarding@resend.dev';
+        'BonzoByte <onboarding@resend.dev>';
 
     const REPLY_TO =
         replyTo ||

@@ -1,5 +1,5 @@
 import { env } from '../config/env.js';
-import { sendMail } from './mailer.resend.js';
+import transporter from './mailer.js';
 
 export default async function sendVerificationEmail(toEmail, user, token) {
   const FRONTEND_URL = env.FRONTEND_URL || 'http://localhost:4200';
@@ -18,7 +18,7 @@ export default async function sendVerificationEmail(toEmail, user, token) {
     </p>
   `;
 
-  const resp = await sendMail({
+  const resp = await transporter.sendMail({
     to: toEmail,
     subject,
     text,
