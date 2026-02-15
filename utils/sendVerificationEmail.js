@@ -1,15 +1,16 @@
 import transporter from './mailer.js';
+import { env } from '../config/env.js';
+
+const FRONTEND_URL = env.FRONTEND_URL || 'http://localhost:4200';
 
 export default async function sendVerificationEmail(toEmail, user, token) {
-  const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:4200';
-  const fromEmail = process.env.EMAIL_USER || 'noreply@bonzobyte.com';
-
   const verifyUrl = `${FRONTEND_URL}/verify?token=${encodeURIComponent(token)}`;
 
-  console.log('[MAIL] sending verification to', toEmail);
-  await transporter.sendMail({
+  console.log('[MAIL] verification sending to:', toEmail);
+
+  const info = await transporter.sendMail({
     to: toEmail,
-    from: `"BonzoByte" <${fromEmail}>`,
+    from: `"BonzoByte" <${process.env.EMAIL_USER}>`,
     subject: 'Verify your email',
     text: `Hi ${user?.name || ''}\n\nClick to verify: ${verifyUrl}`,
     html: `
@@ -18,8 +19,15 @@ export default async function sendVerificationEmail(toEmail, user, token) {
       <p><a href="${verifyUrl}">Verify my email</a></p>
       <p>Or copy & paste:<br/>
         <code style="word-break:break-all">${verifyUrl}</code>
-      </p>
-    `,
+      </p>`,
   });
-  console.log('[MAIL] verification sent to', toEmail);
+
+  console.log('[MAIL] verification sent:', {
+    messageId: info?.messageId,
+    accepted: info?.accepted,
+    rejected: info?.rejected,
+    response: info?.response,
+  });
+
+  return info;
 }

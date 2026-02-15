@@ -62,6 +62,12 @@ export const registerUser = async (req, res) => {
           });
         } catch (mailErr) {
           console.error('[REGISTER] verification email failed (existing user):', mailErr?.message || mailErr);
+          console.error('[REGISTER] verification email failed:', {
+            message: mailErr?.message,
+            code: mailErr?.code,
+            response: mailErr?.response,
+            responseCode: mailErr?.responseCode,
+          });
           return res.status(200).json({
             status: 'ok',
             code: 'EMAIL_SEND_FAILED',
