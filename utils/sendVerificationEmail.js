@@ -6,6 +6,7 @@ export default async function sendVerificationEmail(toEmail, user, token) {
 
   const verifyUrl = `${FRONTEND_URL}/verify?token=${encodeURIComponent(token)}`;
 
+  console.log('[MAIL] sending verification to', toEmail);
   await transporter.sendMail({
     to: toEmail,
     from: `"BonzoByte" <${fromEmail}>`,
@@ -20,4 +21,5 @@ export default async function sendVerificationEmail(toEmail, user, token) {
       </p>
     `,
   });
+  console.log('[MAIL] verification sent to', toEmail);
 }

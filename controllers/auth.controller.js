@@ -16,10 +16,9 @@ const handleError = (res, statusCode, message) => {
   return res.status(statusCode).json({ message });
 };
 
-// ✅ REGISTER (refactor: email + password + optional nickname/name)
-// - no token
-// - sends verification email
-// - returns machine-readable error codes
+// ✅ REGISTER (robust: user se kreira i ako mail padne)
+// - sends verification email (best effort)
+// - NEVER blocks response if mail fails (prevents frontend "Registering..." forever)
 export const registerUser = async (req, res) => {
   try {
     const { email, password, nickname, name, country } = req.body;
@@ -32,7 +31,7 @@ export const registerUser = async (req, res) => {
       return res.status(400).json({
         status: 'error',
         code: 'VALIDATION_ERROR',
-        message: 'Email and password are required.'
+        message: 'Email and password are required.',
       });
     }
 
@@ -53,18 +52,29 @@ export const registerUser = async (req, res) => {
         await existingByEmail.save();
 
         const verificationToken = generateVerificationToken(existingByEmail._id);
-        await sendVerificationEmail(existingByEmail.email, existingByEmail, verificationToken);
 
-        return res.status(200).json({
-          status: 'ok',
-          message: 'Registration successful. Please check your email to verify your account.'
-        });
+        // ✅ BEST EFFORT mail (ne smije blokirati response)
+        try {
+          await sendVerificationEmail(existingByEmail.email, existingByEmail, verificationToken);
+          return res.status(200).json({
+            status: 'ok',
+            message: 'Registration successful. Please check your email to verify your account.',
+          });
+        } catch (mailErr) {
+          console.error('[REGISTER] verification email failed (existing user):', mailErr?.message || mailErr);
+          return res.status(200).json({
+            status: 'ok',
+            code: 'EMAIL_SEND_FAILED',
+            message:
+              'Account updated, but verification email could not be sent. Please use "Resend verification".',
+          });
+        }
       }
 
       return res.status(400).json({
         status: 'error',
         code: 'EMAIL_ALREADY_EXISTS',
-        message: 'Email is already registered.'
+        message: 'Email is already registered.',
       });
     }
 
@@ -74,7 +84,7 @@ export const registerUser = async (req, res) => {
         return res.status(400).json({
           status: 'error',
           code: 'NICKNAME_ALREADY_EXISTS',
-          message: 'Nickname is already taken.'
+          message: 'Nickname is already taken.',
         });
       }
     }
@@ -98,12 +108,23 @@ export const registerUser = async (req, res) => {
     });
 
     const verificationToken = generateVerificationToken(user._id);
-    await sendVerificationEmail(user.email, user, verificationToken);
 
-    return res.status(201).json({
-      status: 'ok',
-      message: 'Registration successful. Please check your email to verify your account.'
-    });
+    // ✅ BEST EFFORT mail (ne smije blokirati response)
+    try {
+      await sendVerificationEmail(user.email, user, verificationToken);
+      return res.status(201).json({
+        status: 'ok',
+        message: 'Registration successful. Please check your email to verify your account.',
+      });
+    } catch (mailErr) {
+      console.error('[REGISTER] verification email failed (new user):', mailErr?.message || mailErr);
+      return res.status(201).json({
+        status: 'ok',
+        code: 'EMAIL_SEND_FAILED',
+        message:
+          'Account created, but verification email could not be sent. Please use "Resend verification".',
+      });
+    }
   } catch (error) {
     // Mongo duplicate key
     if (error?.code === 11000) {
@@ -113,7 +134,7 @@ export const registerUser = async (req, res) => {
         return res.status(400).json({
           status: 'error',
           code: 'EMAIL_ALREADY_EXISTS',
-          message: 'Email is already registered.'
+          message: 'Email is already registered.',
         });
       }
 
@@ -121,14 +142,14 @@ export const registerUser = async (req, res) => {
         return res.status(400).json({
           status: 'error',
           code: 'NICKNAME_ALREADY_EXISTS',
-          message: 'Nickname is already taken.'
+          message: 'Nickname is already taken.',
         });
       }
 
       return res.status(400).json({
         status: 'error',
         code: 'DUPLICATE_KEY',
-        message: 'Duplicate value.'
+        message: 'Duplicate value.',
       });
     }
 
@@ -136,10 +157,11 @@ export const registerUser = async (req, res) => {
     return res.status(500).json({
       status: 'error',
       code: 'SERVER_ERROR',
-      message: 'Server error during registration.'
+      message: 'Server error during registration.',
     });
   }
 };
+
 
 // ✅ LOGIN (robust + radi s password: select:false)
 export const loginUser = async (req, res) => {
