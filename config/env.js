@@ -28,6 +28,10 @@ const Env = z.object({
         .default(2)
         .refine((n) => Number.isInteger(n), { message: 'DETAILS_LOCK_HOURS must be an integer.' }),
 
+    RESEND_API_KEY: z.string().optional(),
+    EMAIL_FROM: z.string().optional(),
+    EMAIL_REPLY_TO: z.string().optional(),
+
     EMAIL_USER: z.string().email().optional(),
     EMAIL_PASS: z.string().optional(),
     GOOGLE_CLIENT_ID: z.string().optional(),

@@ -1,37 +1,29 @@
-import transporter from './mailer.js';
 import { env } from '../config/env.js';
+import { sendMail } from './mailer.resend.js';
 
 export default async function sendVerificationEmail(toEmail, user, token) {
-  const frontendUrl = env.FRONTEND_URL || 'http://localhost:4200';
-  const verifyUrl = `${frontendUrl}/verify?token=${encodeURIComponent(token)}`;
+  const FRONTEND_URL = env.FRONTEND_URL || 'http://localhost:4200';
+  const verifyUrl = `${FRONTEND_URL}/verify?token=${encodeURIComponent(token)}`;
 
-  // ✅ From MUST match SMTP account (anti-spoof / DMARC)
-  const fromAddress = env.EMAIL_USER; // npr. tvoj Gmail ili pravi SMTP user
-  if (!fromAddress) {
-    throw new Error('[MAIL] EMAIL_USER is missing (cannot send verification email).');
-  }
+  console.log('[MAIL] verification sending to:', toEmail);
 
-  const info = await transporter.sendMail({
+  const subject = 'Verify your email';
+  const text = `Hi ${user?.name || ''}\n\nClick to verify: ${verifyUrl}`;
+  const html = `
+    <p>Hi ${user?.name || ''},</p>
+    <p>Click to verify your email:</p>
+    <p><a href="${verifyUrl}">Verify my email</a></p>
+    <p>Or copy &amp; paste:<br/>
+      <code style="word-break:break-all">${verifyUrl}</code>
+    </p>
+  `;
+
+  const resp = await sendMail({
     to: toEmail,
-    from: `"BonzoByte" <${fromAddress}>`,
-    replyTo: `"BonzoByte" <${fromAddress}>`,
-    subject: 'Verify your email',
-    text: `Hi ${user?.name || ''}\n\nClick to verify: ${verifyUrl}`,
-    html: `
-      <p>Hi ${user?.name || ''},</p>
-      <p>Click to verify your email:</p>
-      <p><a href="${verifyUrl}">Verify my email</a></p>
-      <p>Or copy & paste:<br/>
-        <code style="word-break:break-all">${verifyUrl}</code>
-      </p>`,
+    subject,
+    text,
+    html,
   });
 
-  console.log('[MAIL] Verification sent', {
-    to: toEmail,
-    messageId: info?.messageId,
-    accepted: info?.accepted,
-    rejected: info?.rejected,
-  });
-
-  return info;
+  console.log('[MAIL] verification sent:', resp?.id || resp);
 }
