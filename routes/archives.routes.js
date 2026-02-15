@@ -9,7 +9,6 @@ import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } f
 import { canAccessFutureMatchDetails } from '../utils/entitlements.js';
 import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { optionalAuth } from '../middleware/auth.middleware.js';
-import { getNowDebug } from '../utils/now.js';
 import { env } from '../config/env.js';
 
 const router = Router();
