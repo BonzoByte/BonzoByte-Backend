@@ -35,13 +35,11 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    // 🔥 ako postoji user, trebamo znati ima li local password
     const existingByEmail = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (existingByEmail) {
-      // OAuth user bez local passworda -> postavi password
       if (!existingByEmail.password) {
-        existingByEmail.password = password; // plaintext -> pre-save hook hashira
+        existingByEmail.password = password;
 
         if (normalizedNickname && !existingByEmail.nickname) existingByEmail.nickname = normalizedNickname;
         if (normalizedName && !existingByEmail.name) existingByEmail.name = normalizedName;
@@ -51,30 +49,25 @@ export const registerUser = async (req, res) => {
 
         await existingByEmail.save();
 
-        const verificationToken = generateVerificationToken(existingByEmail._id);
+        let mailOk = false;
+        let mailError = null;
 
-        // ✅ BEST EFFORT mail (ne smije blokirati response)
         try {
+          const verificationToken = generateVerificationToken(existingByEmail._id);
           await sendVerificationEmail(existingByEmail.email, existingByEmail, verificationToken);
-          return res.status(200).json({
-            status: 'ok',
-            message: 'Registration successful. Please check your email to verify your account.',
-          });
-        } catch (mailErr) {
-          console.error('[REGISTER] verification email failed (existing user):', mailErr?.message || mailErr);
-          console.error('[REGISTER] verification email failed:', {
-            message: mailErr?.message,
-            code: mailErr?.code,
-            response: mailErr?.response,
-            responseCode: mailErr?.responseCode,
-          });
-          return res.status(200).json({
-            status: 'ok',
-            code: 'EMAIL_SEND_FAILED',
-            message:
-              'Account updated, but verification email could not be sent. Please use "Resend verification".',
-          });
+          mailOk = true;
+        } catch (err) {
+          mailError = err?.message || 'MAIL_SEND_FAILED';
+          console.error('[REGISTER] Verification email failed (existing oauth user):', err);
         }
+
+        return res.status(200).json({
+          status: 'ok',
+          message: mailOk
+            ? 'Registration successful. Please check your email to verify your account.'
+            : 'Registration successful, but verification email failed to send. Please use "Resend verification".',
+          mail: { ok: mailOk, error: mailError },
+        });
       }
 
       return res.status(400).json({
@@ -97,7 +90,7 @@ export const registerUser = async (req, res) => {
 
     const user = await User.create({
       email: normalizedEmail,
-      password, // plaintext -> hook hashira
+      password,
       nickname: normalizedNickname || undefined,
       name: normalizedName || normalizedNickname || normalizedEmail.split('@')[0],
       country,
@@ -113,38 +106,26 @@ export const registerUser = async (req, res) => {
       ads: { enabled: true, disabledReason: 'trial' },
     });
 
+    let mailOk = false;
+    let mailError = null;
 
-    // ✅ BEST EFFORT mail (ne smije blokirati response)
     try {
-      let mailOk = false;
-      let mailError = null;
-
       const verificationToken = generateVerificationToken(user._id);
       await sendVerificationEmail(user.email, user, verificationToken);
       mailOk = true;
-      return res.status(201).json({
-        status: 'ok',
-        message: 'Registration successful. Please check your email to verify your account.',
-      });
-    } catch (mailErr) {
-      mailError = e?.message || 'MAIL_SEND_FAILED';
-      console.error('[REGISTER] Verification email failed:', e);
-      console.error('[REGISTER] verification email failed AFTER user creation:', {
-        message: mailErr?.message,
-        code: mailErr?.code,
-        response: mailErr?.response,
-        responseCode: mailErr?.responseCode,
-      });
-
-      // ✅ user exists, but email failed — return OK so UI can finish
-      return res.status(201).json({
-        status: 'ok',
-        code: 'EMAIL_SEND_FAILED',
-        message: 'Account created, but verification email could not be sent. Please use "Resend verification".'
-      });
+    } catch (err) {
+      mailError = err?.message || 'MAIL_SEND_FAILED';
+      console.error('[REGISTER] Verification email failed (new user):', err);
     }
+
+    return res.status(201).json({
+      status: 'ok',
+      message: mailOk
+        ? 'Registration successful. Please check your email to verify your account.'
+        : 'Registration successful, but verification email failed to send. Please use "Resend verification".',
+      mail: { ok: mailOk, error: mailError },
+    });
   } catch (error) {
-    // Mongo duplicate key
     if (error?.code === 11000) {
       const key = Object.keys(error.keyPattern || {})[0];
 
@@ -179,7 +160,6 @@ export const registerUser = async (req, res) => {
     });
   }
 };
-
 
 // ✅ LOGIN (robust + radi s password: select:false)
 export const loginUser = async (req, res) => {
