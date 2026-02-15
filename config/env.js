@@ -9,7 +9,7 @@ const asOptionalUrl = z.preprocess(
 );
 
 const Env = z.object({
-    FRONTEND_URL: z.string().url().default('http://localhost:4200'),
+    FRONTEND_URL: 'https://bonzo-byte-frontend.vercel.app',
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().default(5000),
 
@@ -34,8 +34,8 @@ const Env = z.object({
     FACEBOOK_CLIENT_SECRET: z.string().optional(),
     FACEBOOK_CALLBACK_URL: asOptionalUrl,
 
-    CORS_ORIGINS: z.string().default('http://localhost:4200'),
-    BASE_URL: z.string().url().default('http://localhost:5000'),
+    CORS_ORIGINS: z.string().default('https://bonzo-byte-frontend.vercel.app'),
+    BASE_URL: z.string().url().default('https://bonzobyte-backend.onrender.com'),
 
     ARCHIVES_ONLY: z.string().optional(),
 
