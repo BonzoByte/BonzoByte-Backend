@@ -123,12 +123,18 @@ export const registerUser = async (req, res) => {
         message: 'Registration successful. Please check your email to verify your account.',
       });
     } catch (mailErr) {
-      console.error('[REGISTER] verification email failed (new user):', mailErr?.message || mailErr);
+      console.error('[REGISTER] verification email failed AFTER user creation:', {
+        message: mailErr?.message,
+        code: mailErr?.code,
+        response: mailErr?.response,
+        responseCode: mailErr?.responseCode,
+      });
+
+      // ✅ user exists, but email failed — return OK so UI can finish
       return res.status(201).json({
         status: 'ok',
         code: 'EMAIL_SEND_FAILED',
-        message:
-          'Account created, but verification email could not be sent. Please use "Resend verification".',
+        message: 'Account created, but verification email could not be sent. Please use "Resend verification".'
       });
     }
   } catch (error) {
