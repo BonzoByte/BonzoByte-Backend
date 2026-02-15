@@ -1,12 +1,11 @@
+// controllers/auth.controller.js
 import User from '../models/user.model.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
-import { generateToken, generateVerificationToken } from '../utils/generateToken.js';
+import { generateVerificationToken } from '../utils/generateToken.js';
 import sendVerificationEmail from '../utils/sendVerificationEmail.js';
 import sendResetPasswordEmail from '../utils/sendResetPasswordEmail.js';
-import sendEmail from '../utils/sendEmail.js';
-import moment from 'moment';
 import asyncHandler from 'express-async-handler';
 import transporter from '../utils/mailer.js';
 import { getEntitlements } from '../utils/entitlements.js';
@@ -35,11 +34,13 @@ export const registerUser = async (req, res) => {
       });
     }
 
+    // 🔥 uzmi password iako je select:false u schemi (treba nam za detekciju local vs oauth)
     const existingByEmail = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (existingByEmail) {
+      // OAuth user bez local passworda -> postavi password + pošalji verifikaciju (best effort)
       if (!existingByEmail.password) {
-        existingByEmail.password = password;
+        existingByEmail.password = password; // plaintext -> pre-save hook hashira
 
         if (normalizedNickname && !existingByEmail.nickname) existingByEmail.nickname = normalizedNickname;
         if (normalizedName && !existingByEmail.name) existingByEmail.name = normalizedName;
@@ -49,27 +50,23 @@ export const registerUser = async (req, res) => {
 
         await existingByEmail.save();
 
-        let mailOk = false;
-        let mailError = null;
+        const verificationToken = generateVerificationToken(existingByEmail._id);
 
-        try {
-          const verificationToken = generateVerificationToken(existingByEmail._id);
-          await sendVerificationEmail(existingByEmail.email, existingByEmail, verificationToken);
-          mailOk = true;
-        } catch (err) {
-          mailError = err?.message || 'MAIL_SEND_FAILED';
-          console.error('[REGISTER] Verification email failed (existing oauth user):', err);
-        }
+        // ✅ fire-and-forget (NE čekamo)
+        sendVerificationEmail(existingByEmail.email, existingByEmail, verificationToken)
+          .then(() => console.log('[REGISTER] Verification email sent (existing oauth user):', existingByEmail.email))
+          .catch((err) =>
+            console.warn('[REGISTER] Verification email failed (existing oauth user):', err?.message || err)
+          );
 
         return res.status(200).json({
           status: 'ok',
-          message: mailOk
-            ? 'Registration successful. Please check your email to verify your account.'
-            : 'Registration successful, but verification email failed to send. Please use "Resend verification".',
-          mail: { ok: mailOk, error: mailError },
+          message: 'Registration successful. Please check your email to verify your account.',
+          emailStatus: 'queued',
         });
       }
 
+      // ✅ normalan user već postoji -> error (NE 201 OK)
       return res.status(400).json({
         status: 'error',
         code: 'EMAIL_ALREADY_EXISTS',
@@ -77,6 +74,7 @@ export const registerUser = async (req, res) => {
       });
     }
 
+    // nickname unique (ako je poslan)
     if (normalizedNickname) {
       const existingByNickname = await User.findOne({ nickname: normalizedNickname });
       if (existingByNickname) {
@@ -90,7 +88,7 @@ export const registerUser = async (req, res) => {
 
     const user = await User.create({
       email: normalizedEmail,
-      password,
+      password, // plaintext -> hook hashira
       nickname: normalizedNickname || undefined,
       name: normalizedName || normalizedNickname || normalizedEmail.split('@')[0],
       country,
@@ -106,26 +104,20 @@ export const registerUser = async (req, res) => {
       ads: { enabled: true, disabledReason: 'trial' },
     });
 
-    let mailOk = false;
-    let mailError = null;
+    const verificationToken = generateVerificationToken(user._id);
 
-    try {
-      const verificationToken = generateVerificationToken(user._id);
-      await sendVerificationEmail(user.email, user, verificationToken);
-      mailOk = true;
-    } catch (err) {
-      mailError = err?.message || 'MAIL_SEND_FAILED';
-      console.error('[REGISTER] Verification email failed (new user):', err);
-    }
+    // ✅ fire-and-forget (NE čekamo)
+    sendVerificationEmail(user.email, user, verificationToken)
+      .then(() => console.log('[REGISTER] Verification email sent (new user):', user.email))
+      .catch((err) => console.warn('[REGISTER] Verification email failed (new user):', err?.message || err));
 
     return res.status(201).json({
       status: 'ok',
-      message: mailOk
-        ? 'Registration successful. Please check your email to verify your account.'
-        : 'Registration successful, but verification email failed to send. Please use "Resend verification".',
-      mail: { ok: mailOk, error: mailError },
+      message: 'Registration successful. Please check your email to verify your account.',
+      emailStatus: 'queued',
     });
   } catch (error) {
+    // Mongo duplicate key
     if (error?.code === 11000) {
       const key = Object.keys(error.keyPattern || {})[0];
 
@@ -173,20 +165,20 @@ export const loginUser = async (req, res) => {
       return res.status(400).json({
         status: 'error',
         code: 'VALIDATION_ERROR',
-        message: 'Identifier and password are required.'
+        message: 'Identifier and password are required.',
       });
     }
 
     // 🔥 KLJUČNO: uzmi password iako je select:false u schemi
     const user = await User.findOne({
-      $or: [{ email: idf }, { nickname: idf }]
+      $or: [{ email: idf }, { nickname: idf }],
     }).select('+password');
 
     if (!user || !user.password) {
       return res.status(401).json({
         status: 'error',
         code: 'INVALID_CREDENTIALS',
-        message: 'Invalid email/username or password.'
+        message: 'Invalid email/username or password.',
       });
     }
 
@@ -195,7 +187,7 @@ export const loginUser = async (req, res) => {
       return res.status(401).json({
         status: 'error',
         code: 'INVALID_CREDENTIALS',
-        message: 'Invalid email/username or password.'
+        message: 'Invalid email/username or password.',
       });
     }
 
@@ -203,15 +195,13 @@ export const loginUser = async (req, res) => {
       return res.status(403).json({
         status: 'error',
         code: 'EMAIL_NOT_VERIFIED',
-        message: 'Please verify your email before logging in.'
+        message: 'Please verify your email before logging in.',
       });
     }
 
-    const token = jwt.sign(
-      { id: user._id.toString() },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
-    );
+    const token = jwt.sign({ id: user._id.toString() }, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRES_IN || '1d',
+    });
 
     return res.status(200).json({
       status: 'ok',
@@ -227,14 +217,14 @@ export const loginUser = async (req, res) => {
         isVerified: !!user.isVerified,
         provider: Array.isArray(user.provider) ? user.provider : [],
         entitlements: getEntitlements(user),
-      }
+      },
     });
   } catch (error) {
     console.error('[LOGIN ERROR]:', error);
     return res.status(500).json({
       status: 'error',
       code: 'SERVER_ERROR',
-      message: 'Server error during login.'
+      message: 'Server error during login.',
     });
   }
 };
@@ -245,7 +235,6 @@ export const logoutUser = async (req, res) => {
     const userId = req.user.id;
 
     const user = await User.findById(userId);
-
     if (!user) {
       return res.status(404).json({ message: 'Korisnik nije pronađen.' });
     }
@@ -274,48 +263,43 @@ export const verifyEmail = async (req, res) => {
     user.isUser = true;
     await user.save();
 
-    res.status(200).json({ message: 'Email uspješno verificiran.' });
-
+    return res.status(200).json({ message: 'Email uspješno verificiran.' });
   } catch (error) {
     console.error('[VERIFY EMAIL ERROR]:', error);
-    handleError(res, 400, 'Token nije ispravan ili je istekao.');
+    return handleError(res, 400, 'Token nije ispravan ili je istekao.');
   }
 };
 
-// ✅ RESEND VERIFY EMAIL
+// ✅ RESEND VERIFY EMAIL (NE blokira response)
 export const resendVerificationEmail = async (req, res) => {
   try {
-    console.log("start verification");
-    const { email } = req.body;
-    console.log('[RESEND] Email primljen:', email); // <-- sada ok
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ message: 'Email is required.' });
 
     const user = await User.findOne({ email });
-    console.log('[RESEND] User pronađen:', user);
+    if (!user) return res.status(400).json({ message: 'Korisnik ne postoji.' });
 
-    if (!user) {
-      return res.status(400).json({ message: 'Korisnik ne postoji.' });
-    }
-
-    if (user.isUser) {
+    if (user.isUser || user.isVerified) {
       return res.status(400).json({ message: 'Račun je već verificiran.' });
     }
 
     const token = generateVerificationToken(user._id);
-    console.log('[RESEND] Token generiran:', token);
 
-    await sendVerificationEmail(user.email, user, token);
-    console.log('[RESEND] Email poslan');
+    // ✅ fire-and-forget
+    sendVerificationEmail(user.email, user, token)
+      .then(() => console.log('[RESEND] Verification email sent:', user.email))
+      .catch((err) => console.warn('[RESEND] Verification email failed:', err?.message || err));
 
-    return res.status(200).json({ message: 'Verifikacijski email ponovno poslan.' });
-
+    return res.status(200).json({ message: 'Verifikacijski email ponovno poslan.', emailStatus: 'queued' });
   } catch (error) {
     console.error('[RESEND VERIFICATION ERROR]:', error);
-    res.status(500).json({ message: 'Greška prilikom slanja verifikacije.' });
+    return res.status(500).json({ message: 'Greška prilikom slanja verifikacije.' });
   }
 };
 
 export async function forgotPassword(req, res) {
-  const { email } = req.body;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+
   try {
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: 'Korisnik s tom email adresom ne postoji' });
@@ -325,6 +309,7 @@ export async function forgotPassword(req, res) {
     user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 sat
     await user.save();
 
+    // ovdje može ostati await (ili isto fire-and-forget), ali bar neće blokirati register flow
     await sendResetPasswordEmail(email, token);
     return res.json({ message: 'Email za reset lozinke je poslan' });
   } catch (err) {
@@ -344,8 +329,8 @@ export async function resetPassword(req, res) {
     const user = await User.findOne({
       email: String(email).trim().toLowerCase(),
       resetPasswordToken: token,
-      resetPasswordExpires: { $gt: Date.now() }
-    }).select('+password'); // nije nužno, ali ne smeta
+      resetPasswordExpires: { $gt: Date.now() },
+    }).select('+password');
 
     if (!user) {
       return res.status(400).json({ message: 'Neispravan ili istekao token.' });
@@ -368,7 +353,6 @@ export async function resetPassword(req, res) {
 export const getCurrentUser = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).populate('country', 'countryShort countryFull');
-
     if (!user) return res.status(404).json({ message: 'Korisnik nije pronađen.' });
 
     return res.status(200).json({
@@ -392,7 +376,8 @@ export const getCurrentUser = async (req, res) => {
 };
 
 export const requestResetPassword = async (req, res) => {
-  const { email } = req.body;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+
   try {
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: 'Korisnik s ovim emailom ne postoji.' });
@@ -413,6 +398,7 @@ export const requestResetPassword = async (req, res) => {
 export const getMe = (req, res) => {
   const u = req.user;
   if (!u) return res.status(401).json({ message: 'Unauthorized' });
+
   res.json({
     _id: u._id,
     name: u.name,
@@ -429,7 +415,6 @@ export const getMe = (req, res) => {
 // ✅ DEV ONLY: force-verify user (for testing trial/login without emails)
 export const devVerifyUser = async (req, res) => {
   try {
-    // gate: only when explicitly enabled
     const allow =
       String(process.env.DEV_BYPASS_VERIFY || '') === '1' ||
       String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
@@ -458,8 +443,6 @@ export const devVerifyUser = async (req, res) => {
 
     user.isVerified = true;
     user.isUser = true;
-
-    // (optional) ako baš želimo, možemo osigurati trial struct
     user.trial = user.trial || { endsAt: null, grantedDaysTotal: 0, lastGrantedAt: null };
 
     await user.save();
@@ -494,15 +477,10 @@ export const contactUs = asyncHandler(async (req, res) => {
     return res.status(400).json({ message: 'Name, email and message are required.' });
   }
 
-  // 🔧 Fallback logika za primatelja
-  const TO =
-    process.env.SUPPORT_EMAIL ||
-    process.env.CONTACT_TO ||
-    process.env.EMAIL_USER ||
-    'bonzobyte@gmail.com';
+  const TO = process.env.SUPPORT_EMAIL || process.env.CONTACT_TO || process.env.EMAIL_USER || 'bonzobyte@gmail.com';
 
   if (!TO) {
-    console.error('[CONTACT] No recipient configured (SUPPORT_EMAIL/CONTACT_TO/SMTP_USER missing).');
+    console.error('[CONTACT] No recipient configured (SUPPORT_EMAIL/CONTACT_TO/EMAIL_USER missing).');
     return res.status(500).json({ message: 'Mail recipient not configured on server.' });
   }
 
