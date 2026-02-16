@@ -66,5 +66,10 @@ export function canAccessFutureMatchDetails(u, expectedStartUtc, lockHours = 2) 
 
     const start = new Date(expectedStartUtc);
     const unlockAt = new Date(start.getTime() - lockHours * 60 * 60 * 1000);
+    console.log('[LOCK] now=', getNow().toISOString());
+    console.log('[LOCK] start=', new Date(expectedStartUtc).toISOString());
+    console.log('[LOCK] unlockAt=', unlockAt.toISOString());
+    console.log('[LOCK] user?', !!u, 'trial=', hasActiveTrial(u), 'premium=', isPremium(u), 'admin=', !!u?.isAdmin);
+
     return getNow() >= unlockAt;
 }
