@@ -3,9 +3,8 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import zlib, { brotliDecompressSync } from 'zlib';
-
 import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
-
+import { optionalAuth } from '../middleware/optionalAuth.js';
 import { canAccessFutureMatchDetails } from '../utils/entitlements.js';
 import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { optionalAuth } from '../middleware/auth.middleware.js';
