@@ -93,6 +93,10 @@ const TOURNAMENTS_INDEX_DIR =
     process.env.BROTLI_TOURNAMENTS_INDEX_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\tournaments\\indexBuild';
 
+const ANALYTICS_DIR =
+    process.env.BROTLI_ANALYTICS_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\analytics';
+
 const R2 = {
     bucket: process.env.R2_BUCKET || '',
     accountId: process.env.R2_ACCOUNT_ID || '',
@@ -772,6 +776,46 @@ router.get('/players/photo/:id', async (req, res) => {
     } catch (e) {
         console.error('players/photo failed', e);
         return res.status(500).json({ ok: false });
+    }
+});
+
+router.get('/analytics/dashboard', async (req, res, next) => {
+    try {
+        const fileName = 'analytics-dashboard.br';
+
+        if (ARCHIVES_SOURCE === 'remote') {
+            assertR2Configured();
+
+            const key = `analytics/${fileName}`;
+
+            const out = await s3.send(new GetObjectCommand({
+                Bucket: R2.bucket,
+                Key: key,
+            }));
+
+            if (!out || !out.Body) {
+                return res.status(404).json({ message: 'Analytics archive not found.' });
+            }
+
+            const buf = await streamToBuffer(out.Body);
+
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Cache-Control', 'public, max-age=300');
+            return res.send(buf);
+        }
+
+        // local mode
+        const fullPath = path.join(ANALYTICS_DIR, fileName);
+
+        if (!fs.existsSync(fullPath)) {
+            return res.status(404).json({ message: 'Analytics archive not found.' });
+        }
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.sendFile(fullPath);
+    } catch (err) {
+        next(err);
     }
 });
 
