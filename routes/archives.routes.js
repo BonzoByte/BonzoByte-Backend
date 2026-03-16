@@ -89,6 +89,10 @@ const PLAYERS_INDEX_DIR =
     process.env.BROTLI_PLAYERS_INDEX_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\indexBuild';
 
+    const PLAYER_DETAILS_DIR =
+    process.env.BROTLI_PLAYERS_DETAILS_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\details';
+
 const TOURNAMENTS_INDEX_DIR =
     process.env.BROTLI_TOURNAMENTS_INDEX_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\tournaments\\indexBuild';
@@ -167,12 +171,48 @@ async function r2GetObjectBufferWithMeta(key) {
 
 async function readArchiveBuffer(kind, name) {
     if (ARCHIVES_SOURCE === 'local') {
-        const filePath = path.join(kind === 'daily' ? DAILY_DIR : MATCH_DETAILS_DIR, `${name}.br`);
+        let filePath;
+
+        switch (kind) {
+            case 'daily':
+                filePath = path.join(DAILY_DIR, `${name}.br`);
+                break;
+
+            case 'matches':
+                filePath = path.join(MATCH_DETAILS_DIR, `${name}.br`);
+                break;
+
+            case 'player-details':
+                filePath = path.join(PLAYER_DETAILS_DIR, `${name}.br`);
+                break;
+
+            default:
+                throw new Error(`Unsupported archive kind: ${kind}`);
+        }
+
         await fs.promises.access(filePath, fs.constants.R_OK);
         return await fs.promises.readFile(filePath);
     }
 
-    const key = kind === 'daily' ? `daily/${name}.br` : `matches/${name}.br`;
+    let key;
+
+    switch (kind) {
+        case 'daily':
+            key = `daily/${name}.br`;
+            break;
+
+        case 'matches':
+            key = `matches/${name}.br`;
+            break;
+
+        case 'player-details':
+            key = `players/details/${name}.br`;
+            break;
+
+        default:
+            throw new Error(`Unsupported archive kind: ${kind}`);
+    }
+
     return await fetchRemoteBrToBuffer(key);
 }
 
@@ -646,6 +686,34 @@ router.get('/players/index/:file', async (req, res, next) => {
         res.setHeader('Content-Type', 'application/octet-stream');
         return res.send(brBuf);
     } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/archives/players/details/:playerTPId
+router.get('/players/details/:playerTPId', async (req, res, next) => {
+    try {
+        const { playerTPId } = req.params;
+
+        if (!playerTPId || !/^\d+$/.test(playerTPId)) {
+            return res.status(400).json({ message: 'Invalid player TPId.' });
+        }
+
+        const buffer = await readArchiveBuffer('player-details', playerTPId);
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+
+        return res.send(buffer);
+    } catch (e) {
+        if (e?.code === 'ENOENT') {
+            return res.status(404).json({
+                message: 'Player details archive not found.',
+                path: req.originalUrl
+            });
+        }
+
         next(e);
     }
 });
