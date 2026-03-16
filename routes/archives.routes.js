@@ -360,12 +360,15 @@ async function serveMatchDetails(req, res) {
         return res.status(400).json({ message: 'Invalid id format.' });
     }
 
-    const brBuf = await readArchiveBuffer('match', id);
+    const brBuf = await readArchiveBuffer('matches', id);
+
+    // Backend smije privremeno dekomprimirati SAMO radi guard logike,
+    // ali klijentu vraćamo originalni .br buffer.
     const rawBuf = brotliDecompressSync(brBuf);
     const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
     const json = JSON.parse(text);
 
-    const expectedStartUtc = json?.m003; // "YYYY-MM-DDTHH:mm:ss.sssZ"
+    const expectedStartUtc = json?.m003;
     const isFinished = !!json?.m656;
 
     if (!isFinished) {
@@ -380,17 +383,12 @@ async function serveMatchDetails(req, res) {
         }
     }
 
-    if (String(req.query.download || '').toLowerCase() === '1') {
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.setHeader('Content-Disposition', `attachment; filename="${id}.json"`);
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        res.setHeader('X-BB-Route', 'match-details');
-        return res.send(text);
-    }
-
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${id}.br"`);
     res.setHeader('Cache-Control', 'public, max-age=300');
     res.setHeader('X-BB-Route', 'match-details');
-    return res.json(json);
+
+    return res.send(brBuf);
 }
 
 /* ------------------------------- Routes ---------------------------- */
