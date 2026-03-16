@@ -89,7 +89,7 @@ const PLAYERS_INDEX_DIR =
     process.env.BROTLI_PLAYERS_INDEX_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\indexBuild';
 
-    const PLAYER_DETAILS_DIR =
+const PLAYER_DETAILS_DIR =
     process.env.BROTLI_PLAYERS_DETAILS_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\details';
 
@@ -573,54 +573,26 @@ router.get('/matches/:id', optionalAuth, async (req, res) => {
     }
 });
 
-// ✅ frontend alias: /api/archives/match-details/:id (guarded)
-router.get('/match-details/:id', optionalAuth, async (req, res) => {
-    try {
-        return await serveMatchDetails(req, res);
-    } catch (e) {
-        console.error('❌ /archives/match-details error:', e);
-        return res.status(500).json({ message: 'Failed to read/decompress archive.' });
-    }
-});
-
-// debug: pokaži lock izračun
-router.get('/debug/lock/:id', async (req, res) => {
+// GET /api/archives/match-details/:id
+router.get('/match-details/:id', async (req, res) => {
     try {
         const id = String(req.params.id || '').trim();
-        if (!/^\d{5,12}$/.test(id)) return res.status(400).json({ message: 'Invalid id format.' });
 
-        const brBuf = await readArchiveBuffer('match', id);
-        const rawBuf = brotliDecompressSync(brBuf);
-        const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
-        const json = JSON.parse(text);
+        if (!/^\d{5,12}$/.test(id)) {
+            return res.status(400).json({ message: 'Invalid id format.' });
+        }
 
-        const expectedStartUtc = json?.m003;
-        const isFinished = !!json?.m656;
+        const brBuf = await readArchiveBuffer('matches', id);
 
-        const now = new Date();
-        const start = new Date(expectedStartUtc);
-        const unlockAt = new Date(start.getTime() - DETAILS_LOCK_HOURS * 60 * 60 * 1000);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `inline; filename="${id}.br"`);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('X-BB-Route', 'match-details');
 
-        const allowedAsGuest = isFinished ? true : canAccessFutureMatchDetails(null, expectedStartUtc, DETAILS_LOCK_HOURS);
-
-        res.setHeader('Cache-Control', 'no-store');
-        res.setHeader('X-BB-Debug', '1');
-
-        return res.json({
-            ok: true,
-            id,
-            nowIso: now.toISOString(),
-            expectedStartUtc,
-            startIso: isNaN(start.getTime()) ? null : start.toISOString(),
-            unlockAtIso: isNaN(unlockAt.getTime()) ? null : unlockAt.toISOString(),
-            isFinished,
-            lockHours: DETAILS_LOCK_HOURS,
-            allowedAsGuest,
-            lockedResponseExample: buildDetailsLockedResponse(expectedStartUtc, DETAILS_LOCK_HOURS),
-        });
+        return res.send(brBuf);
     } catch (e) {
-        console.error('debug lock error', e);
-        return res.status(500).json({ message: 'debug lock failed' });
+        console.error('❌ /archives/match-details error:', e);
+        return res.status(500).json({ message: 'Failed to read archive.' });
     }
 });
 
