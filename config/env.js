@@ -41,7 +41,7 @@ const Env = z.object({
     FACEBOOK_CLIENT_SECRET: z.string().optional(),
     FACEBOOK_CALLBACK_URL: asOptionalUrl,
 
-    CORS_ORIGINS: z.string().default('https://bonzo-byte-frontend.vercel.app'),
+    CORS_ORIGINS: z.string().default('https://bonzo-byte-frontend.vercel.app').and('http://localhost:4200'),
     BASE_URL: z.string().url().default('https://bonzobyte-backend.onrender.com'),
 
     ARCHIVES_ONLY: z.string().optional(),
@@ -63,6 +63,6 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
-export const corsAllowlist = env.CORS_ORIGINS.split(',').map((s) => s.trim());
+ export const corsAllowlist = env.CORS_ORIGINS.split(',').map((s) => s.trim());
 export const frontendUrl = env.FRONTEND_URL;
 export const ARCHIVES_NOW_ISO = '2016-01-04T12:00:00';
