@@ -82,8 +82,8 @@ const ARCHIVES_SOURCE = String(process.env.ARCHIVES_SOURCE || 'remote').trim().t
 const ARCHIVES_BASE_URL = process.env.ARCHIVES_BASE_URL || ''; // legacy
 
 // local dirs (samo za local mode)
-const DAILY_DIR = process.env.BROTLI_DAILY_DIR || 'd:\\BrotliArchives\\DayliMatches';
-const MATCH_DETAILS_DIR = process.env.BROTLI_MATCH_DETAILS_DIR || 'd:\\BrotliArchives\\MatchDetails';
+const DAILY_DIR = process.env.BROTLI_DAILY_DIR || 'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\Archives\\daily';
+const MATCH_DETAILS_DIR = process.env.BROTLI_MATCH_DETAILS_DIR || 'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\Archives\\matches';
 
 const PLAYERS_INDEX_DIR =
     process.env.BROTLI_PLAYERS_INDEX_DIR ||
