@@ -598,7 +598,7 @@ router.get('/match-details/:id', async (req, res) => {
 
 /* --------------------- TrueSkill (players/ts) ---------------------- */
 
-router.get('/players/ts/:playerTPId', async (req, res) => {
+router.get('/ts/:playerTPId', async (req, res) => {
     try {
         const id = String(req.params.playerTPId || '').trim();
         const key = `players/ts/${id}.br`;
