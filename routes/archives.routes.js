@@ -93,6 +93,18 @@ const PLAYER_DETAILS_DIR =
     process.env.BROTLI_PLAYERS_DETAILS_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\details';
 
+const PLAYER_MATCHES_DIR =
+    process.env.BROTLI_PLAYERS_MATCHES_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\matches';
+
+const PLAYER_TS_DIR =
+    process.env.BROTLI_PLAYERS_MATCHES_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\ts';
+
+const TOURNAMENT_MATCHES_DIR =
+    process.env.BROTLI_TOURNAMENTS_MATCHES_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\tournaments\\matches';
+
 const TOURNAMENTS_INDEX_DIR =
     process.env.BROTLI_TOURNAMENTS_INDEX_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\tournaments\\indexBuild';
@@ -186,6 +198,18 @@ async function readArchiveBuffer(kind, name) {
                 filePath = path.join(PLAYER_DETAILS_DIR, `${name}.br`);
                 break;
 
+            case 'players/matches':
+                filePath = path.join(PLAYER_MATCHES_DIR, `${name}.br`);
+                break;
+
+            case 'players/ts':
+                filePath = path.join(PLAYER_TS_DIR, `${name}.br`);
+                break;
+
+            case 'tournaments/matches':
+                filePath = path.join(TOURNAMENT_MATCHES_DIR, `${name}.br`);
+                break;
+
             default:
                 throw new Error(`Unsupported archive kind: ${kind}`);
         }
@@ -207,6 +231,14 @@ async function readArchiveBuffer(kind, name) {
 
         case 'player-details':
             key = `players/details/${name}.br`;
+            break;
+
+        case 'players/matches':
+            key = `players/matches/${name}.br`;
+            break;
+
+        case 'tournaments/matches':
+            key = `tournaments/matches/${name}.br`;
             break;
 
         default:
@@ -601,10 +633,27 @@ router.get('/match-details/:id', async (req, res) => {
 router.get('/ts/:playerTPId', async (req, res) => {
     try {
         const id = String(req.params.playerTPId || '').trim();
-        const key = `players/ts/${id}.br`;
+        const fileName = `${id}.br`;
 
-        const brBuffer = await r2GetObjectBuffer(key);
-        if (!brBuffer) return res.status(404).json({ ok: false, reason: 'missing' });
+        let brBuffer = null;
+
+        if ((process.env.ARCHIVES_SOURCE || '').toLowerCase() === 'local') {
+            const baseDir = process.env.BROTLI_TS_DIR;
+            const fullPath = path.join(baseDir, fileName);
+
+            if (!fs.existsSync(fullPath)) {
+                return res.status(404).json({ ok: false, reason: 'missing-local-file' });
+            }
+
+            brBuffer = fs.readFileSync(fullPath);
+        } else {
+            const key = `players/ts/${fileName}`;
+            brBuffer = await r2GetObjectBuffer(key);
+
+            if (!brBuffer) {
+                return res.status(404).json({ ok: false, reason: 'missing-r2-object' });
+            }
+        }
 
         const jsonBuffer = zlib.brotliDecompressSync(brBuffer);
         const data = JSON.parse(jsonBuffer.toString('utf-8'));
@@ -617,6 +666,66 @@ router.get('/ts/:playerTPId', async (req, res) => {
         res.status(500).json({ ok: false });
     }
 });
+
+router.get('/players/ts/:playerTPId', optionalAuth, async (req, res) => {
+    try {
+        return await servePlayerTsArchive(req, res);
+    } catch (e) {
+        console.error('❌ /players/ts error:', e);
+        return res.status(500).json({
+            message: 'Failed to read player TS archive.',
+            error: e?.message ?? String(e)
+        });
+    }
+});
+
+async function servePlayerTsArchive(req, res) {
+    const playerTPId = String(req.params.playerTPId || '').trim();
+
+    console.log('[player-ts] incoming playerTPId =', playerTPId);
+
+    if (!/^\d{1,12}$/.test(playerTPId)) {
+        return res.status(400).json({ message: 'Invalid playerTPId format.' });
+    }
+
+    try {
+        const brBuf = await readArchiveBuffer('players/ts', playerTPId);
+
+        console.log('[player-ts] readArchiveBuffer OK, bytes =', brBuf?.length ?? 0);
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('X-BB-Route', 'player-ts');
+
+        return res.send(brBuf);
+    } catch (err) {
+        console.error('[player-ts] readArchiveBuffer FAILED', err);
+
+        // hard fallback probe: direktno čitanje fajla
+        const fullPath = path.join(
+            'd:/Development/My Projects/BonzoByteRoot/StaticFiles/Data/archives',
+            'players',
+            'ts',
+            `${playerTPId}.br`
+        );
+
+        console.log('[player-ts] trying direct path =', fullPath);
+
+        const stat = await fs.stat(fullPath);
+        console.log('[player-ts] direct file exists, size =', stat.size);
+
+        const brBuf = await fs.readFile(fullPath);
+        console.log('[player-ts] direct read OK, bytes =', brBuf.length);
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('X-BB-Route', 'player-ts-direct');
+
+        return res.send(brBuf);
+    }
+}
 
 /* ------------------ Players/Tournaments index manifests ------------- */
 
@@ -688,6 +797,32 @@ router.get('/players/details/:playerTPId', async (req, res, next) => {
     }
 });
 
+router.get('/players/matches/:playerTPId', optionalAuth, async (req, res) => {
+    try {
+        return await servePlayerMatchesArchive(req, res);
+    } catch (e) {
+        console.error('❌ /archives/players/matches error:', e);
+        return res.status(500).json({ message: 'Failed to read player matches archive.' });
+    }
+});
+
+async function servePlayerMatchesArchive(req, res) {
+    const playerTPId = String(req.params.playerTPId || '').trim();
+
+    if (!/^\d{1,12}$/.test(playerTPId)) {
+        return res.status(400).json({ message: 'Invalid playerTPId format.' });
+    }
+
+    const brBuf = await readArchiveBuffer('players/matches', playerTPId);
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('X-BB-Route', 'player-matches');
+
+    return res.send(brBuf);
+}
+
 // GET /api/archives/tournaments/manifest
 router.get('/tournaments/manifest', async (_req, res, next) => {
     try {
@@ -728,6 +863,32 @@ router.get('/tournaments/index/:file', async (req, res, next) => {
         next(e);
     }
 });
+
+router.get('/tournaments/matches/:tournamentEventTPId', optionalAuth, async (req, res) => {
+    try {
+        return await serveTournamentMatchesArchive(req, res);
+    } catch (e) {
+        console.error('❌ /archives/tournaments/matches error:', e);
+        return res.status(500).json({ message: 'Failed to read tournament matches archive.' });
+    }
+});
+
+async function serveTournamentMatchesArchive(req, res) {
+    const tournamentEventTPId = String(req.params.tournamentEventTPId || '').trim();
+
+    if (!/^\d{1,12}$/.test(tournamentEventTPId)) {
+        return res.status(400).json({ message: 'Invalid tournamentEventTPId format.' });
+    }
+
+    const brBuf = await readArchiveBuffer('tournaments/matches', tournamentEventTPId);
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${tournamentEventTPId}.br"`);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('X-BB-Route', 'player-matches');
+
+    return res.send(brBuf);
+}
 
 /* ----------------------------- Status ------------------------------ */
 
