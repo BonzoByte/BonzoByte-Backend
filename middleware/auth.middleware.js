@@ -36,30 +36,6 @@ export default async function protect(req, res, next) {
 }
 
 // --------------------
-// OPTIONAL AUTH (NEW)
-// --------------------
-export async function optionalAuth(req, _res, next) {
-    try {
-        const auth = req.headers.authorization || '';
-        const [type, token] = auth.split(' ');
-
-        if (type !== 'Bearer' || !token) {
-            req.user = null;
-            return next();
-        }
-
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await User.findById(decoded.id).select('-password');
-
-        req.user = user || null;
-        return next();
-    } catch {
-        req.user = null;
-        return next();
-    }
-}
-
-// --------------------
 // Role guards
 // --------------------
 export function isUser(req, res, next) {

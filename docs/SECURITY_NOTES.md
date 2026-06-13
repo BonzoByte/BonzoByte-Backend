@@ -25,6 +25,7 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Resolved: Backend registration now validates email format, password length, and optional nickname length (`0054c2d Add backend registration input validation`).
 - Resolved: Protected access JWTs now carry and enforce token version claims (`377d1f5 Enforce token version for protected JWTs`).
 - Resolved: Active optional auth for public archive routes now loads user context only for valid versioned tokens (`de552f7 Load user context in optional auth`).
+- Resolved: The unused optional auth export was removed from the protected auth middleware module.
 
 ## Known Risks And Follow-Up Items
 
@@ -32,7 +33,6 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - High/Medium: OAuth success redirect appears to pass JWT through the query string; query tokens can leak through browser history, logs, analytics, referrers, or screenshots.
 - Medium: A development email verification route exists and is gated by environment / non-production logic; production exposure should be verified.
 - Medium: Forgot/reset flows may reveal whether an email exists; consider generic responses.
-- Low/Unknown: A second optional auth export still exists in the protected auth middleware module; review or remove it later to avoid divergent optional-auth behavior.
 - Unknown: Avatar upload is auth-adjacent and deserves a later focused review.
 - Unknown: `uploads/avatars/` currently contains tracked user-upload/avatar assets. This is accepted as current known project state, but it should not be treated as the long-term production storage model. Long-term, user-uploaded avatars should move to object storage/CDN, with the backend storing references, URLs, or metadata rather than binary uploads in git. Do not refactor avatar upload/storage casually because it affects frontend profile UI, backend upload middleware, stored user avatar paths, and deployed/static asset behavior.
 
@@ -41,10 +41,9 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 1. Review reset token hashing and reset response enumeration.
 2. Review OAuth token transport.
 3. Review development-only routes and production gates.
-4. Review unused optional-auth export in the protected auth middleware module.
-5. Review Angular token storage and session handling.
-6. Review avatar upload security.
-7. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
+4. Review Angular token storage and session handling.
+5. Review avatar upload security.
+6. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
 
 ## Do Not Do Blindly
 
