@@ -17,6 +17,10 @@ const handleError = (res, statusCode, message) => {
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
+const isExplicitDevVerifyEnabled = () =>
+  String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
+  String(process.env.DEV_BYPASS_VERIFY || '') === '1';
+
 // ✅ REGISTER (auto-login; optional auto-verify when EMAIL_DISABLED=1)
 // - sends verification email (best effort)
 // - NEVER blocks response if mail fails (prevents frontend "Registering..." forever)
@@ -415,11 +419,7 @@ export const getMe = (req, res) => {
 // ✅ DEV ONLY: force-verify user (for testing trial/login without emails)
 export const devVerifyUser = async (req, res) => {
   try {
-    const allow =
-      String(process.env.DEV_BYPASS_VERIFY || '') === '1' ||
-      String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
-
-    if (!allow) {
+    if (!isExplicitDevVerifyEnabled()) {
       return res.status(404).json({ message: 'Not found' });
     }
 

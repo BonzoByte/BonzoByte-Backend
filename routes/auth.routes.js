@@ -29,6 +29,9 @@ const router = express.Router();
 
 // Prefer env.FRONTEND_URL; fallback na localhost
 const FRONTEND = env.FRONTEND_URL || 'http://localhost:4200';
+const isAuthDevToolEnabled = () =>
+    String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
+    String(process.env.DEV_BYPASS_VERIFY || '') === '1';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -147,6 +150,10 @@ router.get('/nickname-exists/:nickname', async (req, res) => {
 });
 
 router.get('/debug/routes', (_req, res) => {
+    if (!isAuthDevToolEnabled()) {
+        return res.status(404).json({ message: 'Not found' });
+    }
+
     res.json({ ok: true, hasDevVerify: true });
 });
 
