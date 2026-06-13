@@ -15,6 +15,8 @@ const handleError = (res, statusCode, message) => {
   return res.status(statusCode).json({ message });
 };
 
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
 // ✅ REGISTER (auto-login; optional auto-verify when EMAIL_DISABLED=1)
 // - sends verification email (best effort)
 // - NEVER blocks response if mail fails (prevents frontend "Registering..." forever)
@@ -31,6 +33,30 @@ export const registerUser = async (req, res) => {
         status: 'error',
         code: 'VALIDATION_ERROR',
         message: 'Email and password are required.',
+      });
+    }
+
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid email format.',
+      });
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Password must be at least 8 characters long.',
+      });
+    }
+
+    if (normalizedNickname && (normalizedNickname.length < 3 || normalizedNickname.length > 30)) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Nickname must be between 3 and 30 characters long.',
       });
     }
 
