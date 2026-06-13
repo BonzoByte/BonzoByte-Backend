@@ -28,6 +28,7 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Low/Medium: Duplicate-email register check appears to select the password field unnecessarily.
 - Low/Unknown: Optional auth middleware has more than one implementation; behavior should be reviewed for consistency.
 - Unknown: Avatar upload is auth-adjacent and deserves a later focused review.
+- Unknown: `uploads/avatars/` currently contains tracked user-upload/avatar assets. This is accepted as current known project state, but it should not be treated as the long-term production storage model. Long-term, user-uploaded avatars should move to object storage/CDN, with the backend storing references, URLs, or metadata rather than binary uploads in git. Do not refactor avatar upload/storage casually because it affects frontend profile UI, backend upload middleware, stored user avatar paths, and deployed/static asset behavior.
 
 ## Recommended Order
 
@@ -39,6 +40,7 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 6. Review OAuth token transport.
 7. Review development-only routes and production gates.
 8. Review avatar upload security.
+9. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
 
 ## Do Not Do Blindly
 
