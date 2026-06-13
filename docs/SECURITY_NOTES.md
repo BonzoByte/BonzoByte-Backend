@@ -16,6 +16,7 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Helmet, CORS allow-listing, global rate limiting, and auth route rate limiting exist.
 - Admin data mutations generally use protected/admin middleware.
 - New protected access JWTs include a token version claim, and the protected middleware rejects missing or mismatched token versions. Because the project has no real users yet, legacy access tokens without the version claim are intentionally not tolerated.
+- Active optional auth for public archive routes validates token versions and loads user context for valid tokens; missing, invalid, stale, or mismatched optional tokens continue anonymously.
 
 ## Known Risks And Follow-Up Items
 
@@ -25,7 +26,7 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Medium: A development email verification route exists and is gated by environment / non-production logic; production exposure should be verified.
 - Medium: Backend register/login validation appears weaker than frontend validation; the backend must enforce its own password and input policy.
 - Medium: Forgot/reset flows may reveal whether an email exists; consider generic responses.
-- Low/Unknown: Optional auth middleware behavior is not yet aligned with protected-route token version enforcement; review optional-auth call sites before changing it.
+- Low/Unknown: A second optional auth export still exists in the protected auth middleware module; review or remove it later to avoid divergent optional-auth behavior.
 - Low/Medium: Duplicate-email register check appears to select the password field unnecessarily.
 - Low/Unknown: Optional auth middleware has more than one implementation; behavior should be reviewed for consistency.
 - Unknown: Avatar upload is auth-adjacent and deserves a later focused review.
@@ -36,7 +37,7 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 1. Remove or mask Mongo URI logging.
 2. Remove unnecessary password selection in register duplicate check.
 3. Add backend-side password and input validation.
-4. Review optional-auth token version behavior.
+4. Review unused optional-auth export in the protected auth middleware module.
 5. Review reset token hashing and reset response enumeration.
 6. Review OAuth token transport.
 7. Review development-only routes and production gates.
