@@ -34,7 +34,7 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    const existingByEmail = await User.findOne({ email: normalizedEmail }).select('+password');
+    const existingByEmail = await User.findOne({ email: normalizedEmail });
     if (existingByEmail) {
       return res.status(400).json({
         status: 'error',
