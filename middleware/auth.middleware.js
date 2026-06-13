@@ -14,10 +14,18 @@ export default async function protect(req, res, next) {
         }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (typeof decoded.tv !== 'number') {
+            return res.status(401).json({ message: 'Token nije ispravan ili je istekao.' });
+        }
+
         const user = await User.findById(decoded.id).select('-password');
 
         if (!user) {
             return res.status(401).json({ message: 'Korisnik nije pronađen.' });
+        }
+
+        if (decoded.tv !== (user.tokenVersion ?? 0)) {
+            return res.status(401).json({ message: 'Token nije ispravan ili je istekao.' });
         }
 
         req.user = user;

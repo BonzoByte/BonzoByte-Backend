@@ -3,7 +3,7 @@ import User from '../models/user.model.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
-import { generateVerificationToken } from '../utils/generateToken.js';
+import { generateToken, generateVerificationToken } from '../utils/generateToken.js';
 import sendVerificationEmail from '../utils/sendVerificationEmail.js';
 import sendResetPasswordEmail from '../utils/sendResetPasswordEmail.js';
 import asyncHandler from 'express-async-handler';
@@ -115,11 +115,7 @@ export const registerUser = async (req, res) => {
     }
 
     // ✅ auto-login: vrati token + user
-    const token = jwt.sign(
-      { id: user._id.toString() },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
-    );
+    const token = generateToken(user._id.toString(), user.tokenVersion);
 
     return res.status(201).json({
       status: 'ok',
@@ -205,9 +201,7 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    const token = jwt.sign({ id: user._id.toString() }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN || '1d',
-    });
+    const token = generateToken(user._id.toString(), user.tokenVersion);
 
     return res.status(200).json({
       status: 'ok',
