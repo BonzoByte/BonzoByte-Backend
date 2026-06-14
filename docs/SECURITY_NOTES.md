@@ -32,19 +32,18 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Resolved: Password reset tokens are stored hashed, forgot-password responses are generic, and reset links no longer include email addresses.
 - Resolved: OAuth success transport now sends the access token in the URL fragment instead of the query string.
 - Resolved: Angular access tokens are stored in sessionStorage, and legacy localStorage auth keys are cleared.
+- Resolved: Angular clears stale sessions on first-party authorized API `401` responses, while public auth flows and `403` authorization responses remain feature-level handling.
 
 ## Known Risks And Follow-Up Items
 
 - Low/Accepted: Password reset links still carry a raw one-time token in the URL fragment so the browser can submit it; treat reset links as sensitive.
-- Medium: Global stale-token handling is mostly limited to auth bootstrap; consider centralized 401 handling in the Angular API path.
 - Unknown: Avatar upload is auth-adjacent and deserves a later focused review.
 - Unknown: `uploads/avatars/` currently contains tracked user-upload/avatar assets. This is accepted as current known project state, but it should not be treated as the long-term production storage model. Long-term, user-uploaded avatars should move to object storage/CDN, with the backend storing references, URLs, or metadata rather than binary uploads in git. Do not refactor avatar upload/storage casually because it affects frontend profile UI, backend upload middleware, stored user avatar paths, and deployed/static asset behavior.
 
 ## Recommended Order
 
-1. Review Angular stale-token / 401 handling.
-2. Review avatar upload security.
-3. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
+1. Review avatar upload security.
+2. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
 
 ## Do Not Do Blindly
 
