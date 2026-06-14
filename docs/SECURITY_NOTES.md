@@ -30,20 +30,20 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Resolved: Archive debug endpoints are fail-closed and require the shared explicit development bypass flag outside production.
 - Resolved: Public archive status now returns only a lightweight payload, while verbose archive diagnostics moved to a gated debug status endpoint.
 - Resolved: Password reset tokens are stored hashed, forgot-password responses are generic, and reset links no longer include email addresses.
+- Resolved: OAuth success transport now sends the access token in the URL fragment instead of the query string.
 
 ## Known Risks And Follow-Up Items
 
-- High/Medium: OAuth success redirect appears to pass JWT through the query string; query tokens can leak through browser history, logs, analytics, referrers, or screenshots.
 - Low/Accepted: Password reset links still carry a raw one-time token in the URL fragment so the browser can submit it; treat reset links as sensitive.
+- Medium: Angular currently stores access tokens in localStorage; review token storage and session handling separately.
 - Unknown: Avatar upload is auth-adjacent and deserves a later focused review.
 - Unknown: `uploads/avatars/` currently contains tracked user-upload/avatar assets. This is accepted as current known project state, but it should not be treated as the long-term production storage model. Long-term, user-uploaded avatars should move to object storage/CDN, with the backend storing references, URLs, or metadata rather than binary uploads in git. Do not refactor avatar upload/storage casually because it affects frontend profile UI, backend upload middleware, stored user avatar paths, and deployed/static asset behavior.
 
 ## Recommended Order
 
-1. Review OAuth token transport.
-2. Review Angular token storage and session handling.
-3. Review avatar upload security.
-4. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
+1. Review Angular token storage and session handling.
+2. Review avatar upload security.
+3. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
 
 ## Do Not Do Blindly
 

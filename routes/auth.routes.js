@@ -161,7 +161,7 @@ function issueJwtHandler(req, res) {
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
 
     const token = generateToken(req.user._id, req.user.tokenVersion);
-    return res.redirect(`${FRONTEND}/oauth-success?token=${encodeURIComponent(token)}`);
+    return res.redirect(`${FRONTEND}/oauth-success#token=${encodeURIComponent(token)}`);
 }
 
 function escapeRegex(s) {
