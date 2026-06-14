@@ -28,13 +28,13 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Resolved: The unused optional auth export was removed from the protected auth middleware module.
 - Resolved: Auth development/debug routes are fail-closed and require an explicit development bypass flag outside production.
 - Resolved: Archive debug endpoints are fail-closed and require the shared explicit development bypass flag outside production.
+- Resolved: Public archive status now returns only a lightweight payload, while verbose archive diagnostics moved to a gated debug status endpoint.
 
 ## Known Risks And Follow-Up Items
 
 - High: Password reset tokens appear to be stored as plaintext fields and sent through URL query params; consider storing hashed reset tokens and reviewing reset-link transport.
 - High/Medium: OAuth success redirect appears to pass JWT through the query string; query tokens can leak through browser history, logs, analytics, referrers, or screenshots.
 - Medium: Forgot/reset flows may reveal whether an email exists; consider generic responses.
-- Medium/Unknown: `/api/archives/status` exposes archive/storage diagnostic metadata and should be classified separately as either a public health/status endpoint or an admin/dev diagnostic endpoint.
 - Unknown: Avatar upload is auth-adjacent and deserves a later focused review.
 - Unknown: `uploads/avatars/` currently contains tracked user-upload/avatar assets. This is accepted as current known project state, but it should not be treated as the long-term production storage model. Long-term, user-uploaded avatars should move to object storage/CDN, with the backend storing references, URLs, or metadata rather than binary uploads in git. Do not refactor avatar upload/storage casually because it affects frontend profile UI, backend upload middleware, stored user avatar paths, and deployed/static asset behavior.
 
@@ -42,10 +42,9 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 
 1. Review reset token hashing and reset response enumeration.
 2. Review OAuth token transport.
-3. Classify `/api/archives/status` as public health/status or admin/dev diagnostic.
-4. Review Angular token storage and session handling.
-5. Review avatar upload security.
-6. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
+3. Review Angular token storage and session handling.
+4. Review avatar upload security.
+5. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
 
 ## Do Not Do Blindly
 

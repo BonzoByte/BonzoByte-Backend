@@ -491,6 +491,61 @@ router.get('/_debug/r2-list', async (req, res, next) => {
     }
 });
 
+router.get('/_debug/status', async (_req, res, next) => {
+    try {
+        if (!isArchiveDebugEnabled()) {
+            return res.status(404).json({ message: 'Not found' });
+        }
+
+        const range = await getDailyDateRange();
+        const latestDaily = await (async () => {
+            const br = await listDailyBrFiles();
+            if (!br.length) return null;
+            br.sort((a, b) => b.localeCompare(a));
+            return br[0].replace(/\.br$/i, '');
+        })();
+
+        const latestPlayersIndex = await getLatestIndexFile('players');
+        const latestTournamentsIndex = await getLatestIndexFile('tournaments');
+
+        const payload = {
+            ok: true,
+            source: ARCHIVES_SOURCE,
+            bucket: ARCHIVES_SOURCE === 'remote' ? R2.bucket : null,
+            endpoint: ARCHIVES_SOURCE === 'remote' ? R2.endpoint : null,
+
+            daily: {
+                range: range ?? null,
+                latest: latestDaily ? { yyyymmdd: latestDaily, iso: yyyymmddToIso(latestDaily) } : null,
+            },
+
+            indexes: {
+                players: latestPlayersIndex ? { latest: latestPlayersIndex } : null,
+                tournaments: latestTournamentsIndex ? { latest: latestTournamentsIndex } : null,
+            },
+
+            checks: null,
+            nowUtc: new Date().toISOString(),
+        };
+
+        if (ARCHIVES_SOURCE === 'remote') {
+            const checks = [];
+            if (latestDaily) checks.push(headRemote(`daily/${latestDaily}.br`));
+            if (latestPlayersIndex) checks.push(headRemote(`players/indexBuild/${latestPlayersIndex}`));
+            if (latestTournamentsIndex) checks.push(headRemote(`tournaments/indexBuild/${latestTournamentsIndex}`));
+
+            payload.checks = await Promise.allSettled(checks).then((results) =>
+                results.map((r) => (r.status === 'fulfilled' ? { ok: true, ...r.value } : { ok: false, error: String(r.reason) }))
+            );
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json(payload);
+    } catch (e) {
+        next(e);
+    }
+});
+
 // GET /api/archives/latest-daily
 router.get('/latest-daily', async (_req, res) => {
     try {
@@ -907,55 +962,13 @@ async function serveTournamentMatchesArchive(req, res) {
 
 /* ----------------------------- Status ------------------------------ */
 
-router.get('/status', async (_req, res, next) => {
-    try {
-        const range = await getDailyDateRange();
-        const latestDaily = await (async () => {
-            const br = await listDailyBrFiles();
-            if (!br.length) return null;
-            br.sort((a, b) => b.localeCompare(a));
-            return br[0].replace(/\.br$/i, '');
-        })();
-
-        const latestPlayersIndex = await getLatestIndexFile('players');
-        const latestTournamentsIndex = await getLatestIndexFile('tournaments');
-
-        const payload = {
-            ok: true,
-            source: ARCHIVES_SOURCE,
-            bucket: ARCHIVES_SOURCE === 'remote' ? R2.bucket : null,
-            endpoint: ARCHIVES_SOURCE === 'remote' ? R2.endpoint : null,
-
-            daily: {
-                range: range ?? null,
-                latest: latestDaily ? { yyyymmdd: latestDaily, iso: yyyymmddToIso(latestDaily) } : null,
-            },
-
-            indexes: {
-                players: latestPlayersIndex ? { latest: latestPlayersIndex } : null,
-                tournaments: latestTournamentsIndex ? { latest: latestTournamentsIndex } : null,
-            },
-
-            checks: null,
-            nowUtc: new Date().toISOString(),
-        };
-
-        if (ARCHIVES_SOURCE === 'remote') {
-            const checks = [];
-            if (latestDaily) checks.push(headRemote(`daily/${latestDaily}.br`));
-            if (latestPlayersIndex) checks.push(headRemote(`players/indexBuild/${latestPlayersIndex}`));
-            if (latestTournamentsIndex) checks.push(headRemote(`tournaments/indexBuild/${latestTournamentsIndex}`));
-
-            payload.checks = await Promise.allSettled(checks).then((results) =>
-                results.map((r) => (r.status === 'fulfilled' ? { ok: true, ...r.value } : { ok: false, error: String(r.reason) }))
-            );
-        }
-
-        res.setHeader('Cache-Control', 'no-store');
-        return res.json(payload);
-    } catch (e) {
-        next(e);
-    }
+router.get('/status', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+        ok: true,
+        source: ARCHIVES_SOURCE,
+        nowUtc: new Date().toISOString(),
+    });
 });
 
 /* --------------------------- Players photo -------------------------- */
