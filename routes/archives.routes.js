@@ -10,6 +10,9 @@ import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { env } from '../config/env.js';
 
 const router = Router();
+const isArchiveDebugEnabled = () =>
+    String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
+    String(process.env.DEV_BYPASS_VERIFY || '') === '1';
 
 /* ----------------------------- Helpers ----------------------------- */
 
@@ -426,6 +429,10 @@ async function serveMatchDetails(req, res) {
 /* ------------------------------- Routes ---------------------------- */
 
 router.get('/_debug/config', (_req, res) => {
+    if (!isArchiveDebugEnabled()) {
+        return res.status(404).json({ message: 'Not found' });
+    }
+
     res.json({
         ARCHIVES_SOURCE,
         DETAILS_LOCK_HOURS,
@@ -440,12 +447,20 @@ router.get('/_debug/config', (_req, res) => {
 });
 
 router.get('/debug/now', (_req, res) => {
+    if (!isArchiveDebugEnabled()) {
+        return res.status(404).json({ message: 'Not found' });
+    }
+
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ ok: true, ...getNowDebug() });
 });
 
 router.get('/_debug/r2-list', async (req, res, next) => {
     try {
+        if (!isArchiveDebugEnabled()) {
+            return res.status(404).json({ message: 'Not found' });
+        }
+
         if (ARCHIVES_SOURCE !== 'remote') {
             return res.status(400).json({ error: 'ARCHIVES_SOURCE is not remote', ARCHIVES_SOURCE });
         }
