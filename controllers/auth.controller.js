@@ -21,6 +21,19 @@ const isExplicitDevVerifyEnabled = () =>
   String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
   String(process.env.DEV_BYPASS_VERIFY || '') === '1';
 
+const RESET_PASSWORD_TOKEN_BYTES = 32;
+const RESET_PASSWORD_TOKEN_TTL_MS = 60 * 60 * 1000;
+const RESET_PASSWORD_INVALID_MESSAGE = 'Invalid or expired reset token.';
+const RESET_PASSWORD_REQUEST_MESSAGE = 'If an account with that email exists, a password reset link has been sent.';
+
+const hashResetPasswordToken = (token) =>
+  crypto.createHash('sha256').update(String(token)).digest('hex');
+
+const isValidResetToken = (value) => /^[a-f0-9]{64}$/i.test(String(value || ''));
+
+const sendResetPasswordRequestResponse = (res) =>
+  res.status(200).json({ message: RESET_PASSWORD_REQUEST_MESSAGE });
+
 // ✅ REGISTER (auto-login; optional auto-verify when EMAIL_DISABLED=1)
 // - sends verification email (best effort)
 // - NEVER blocks response if mail fails (prevents frontend "Registering..." forever)
@@ -301,43 +314,71 @@ export const resendVerificationEmail = async (req, res) => {
   }
 };
 
-export async function forgotPassword(req, res) {
+async function requestPasswordReset(req, res) {
   const email = String(req.body?.email || '').trim().toLowerCase();
 
   try {
-    const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ message: 'Korisnik s tom email adresom ne postoji' });
+    if (email && isValidEmail(email)) {
+      const user = await User.findOne({ email });
+      if (user) {
+        const token = crypto.randomBytes(RESET_PASSWORD_TOKEN_BYTES).toString('hex');
+        const tokenHash = hashResetPasswordToken(token);
 
-    const token = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = token;
-    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 sat
-    await user.save();
+        await User.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              resetPasswordToken: tokenHash,
+              resetPasswordExpires: new Date(Date.now() + RESET_PASSWORD_TOKEN_TTL_MS),
+            },
+          },
+          { runValidators: false }
+        );
 
-    // ovdje može ostati await (ili isto fire-and-forget), ali bar neće blokirati register flow
-    await sendResetPasswordEmail(email, token);
-    return res.json({ message: 'Email za reset lozinke je poslan' });
+        try {
+          await sendResetPasswordEmail(user.email, token);
+        } catch (mailErr) {
+          console.warn('[RESET REQUEST EMAIL ERROR]:', mailErr?.message || mailErr);
+        }
+      }
+    }
+
+    return sendResetPasswordRequestResponse(res);
   } catch (err) {
-    console.error('Greška u forgotPassword:', err);
-    return res.status(500).json({ message: 'Greška prilikom slanja emaila' });
+    console.error('[RESET REQUEST ERROR]:', err);
+    return res.status(500).json({ message: 'Failed to process password reset request.' });
   }
 }
 
-export async function resetPassword(req, res) {
-  const { token, email, password } = req.body;
+export async function forgotPassword(req, res) {
+  return requestPasswordReset(req, res);
+}
 
-  if (!token || !email || !password) {
-    return res.status(400).json({ message: 'Token, email i nova lozinka su obavezni.' });
+export async function resetPassword(req, res) {
+  const token = String(req.body?.token || '').trim();
+  const password = req.body?.password;
+
+  if (!isValidResetToken(token)) {
+    return res.status(400).json({ message: RESET_PASSWORD_INVALID_MESSAGE });
+  }
+
+  if (typeof password !== 'string' || !password) {
+    return res.status(400).json({ message: 'Token and new password are required.' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
   }
 
   try {
+    const tokenHash = hashResetPasswordToken(token);
     const user = await User.findOne({
-      email: String(email).trim().toLowerCase(),
-      resetPasswordToken: token,
+      resetPasswordToken: tokenHash,
       resetPasswordExpires: { $gt: Date.now() },
-    }).select('+password');
+    }).select('+password +resetPasswordToken');
 
     if (!user) {
-      return res.status(400).json({ message: 'Neispravan ili istekao token.' });
+      return res.status(400).json({ message: RESET_PASSWORD_INVALID_MESSAGE });
     }
 
     user.password = password; // plaintext -> pre-save hook hashira
@@ -349,7 +390,7 @@ export async function resetPassword(req, res) {
 
     return res.json({ message: 'Lozinka uspješno promijenjena.' });
   } catch (error) {
-    console.error(error);
+    console.error('[RESET PASSWORD ERROR]:', error);
     return res.status(500).json({ message: 'Došlo je do greške prilikom resetiranja lozinke.' });
   }
 }
@@ -379,25 +420,7 @@ export const getCurrentUser = async (req, res) => {
   }
 };
 
-export const requestResetPassword = async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-
-  try {
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: 'Korisnik s ovim emailom ne postoji.' });
-
-    const token = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = token;
-    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000;
-    await user.save();
-
-    await sendResetPasswordEmail(user.email, token);
-    return res.status(200).json({ message: 'Link za resetiranje lozinke poslan.' });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Greška prilikom slanja linka za resetiranje lozinke.' });
-  }
-};
+export const requestResetPassword = requestPasswordReset;
 
 export const getMe = (req, res) => {
   const u = req.user;

@@ -3,7 +3,8 @@ import { env } from '../config/env.js';
 
 const sendResetPasswordEmail = async (email, token) => {
     const base = env.FRONTEND_URL || 'http://localhost:4200';
-    const link = `${base}/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email).replace(/&/g, '&amp;')}`;
+    const normalizedBase = base.replace(/\/+$/, '');
+    const link = `${normalizedBase}/reset-password#token=${encodeURIComponent(token)}`;
 
     await transporter.sendMail({
         from: `"BonzoByte" <${env.EMAIL_USER || 'noreply@bonzobyte.com'}>`,

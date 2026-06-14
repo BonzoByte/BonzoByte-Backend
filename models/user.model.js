@@ -44,8 +44,8 @@ const userSchema = new mongoose.Schema({
     player2TPId: { type: Number, ref: 'Player' },
 
     // ✅ Reset lozinke
-    resetPasswordToken: { type: String },
-    resetPasswordExpires: { type: Date },
+    resetPasswordToken: { type: String, select: false, index: true },
+    resetPasswordExpires: { type: Date, index: true },
     tokenVersion: { type: Number, default: 0 },
 
     plan: { type: String, enum: PLAN, default: 'free', index: true },
