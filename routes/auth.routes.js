@@ -1,9 +1,5 @@
 import express from 'express';
 import passport from 'passport';
-import path from 'path';
-import fs from 'fs';
-import multer from 'multer';
-import { v4 as uuidv4 } from 'uuid';
 import rateLimit from 'express-rate-limit';
 
 import User from '../models/user.model.js';
@@ -32,29 +28,6 @@ const FRONTEND = env.FRONTEND_URL || 'http://localhost:4200';
 const isAuthDevToolEnabled = () =>
     String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
     String(process.env.DEV_BYPASS_VERIFY || '') === '1';
-
-const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-// --- multer setup ---
-const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-    filename: (_req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname)),
-});
-
-const upload = multer({
-    storage,
-    fileFilter: (_req, file, cb) => {
-        const ok = ['image/jpeg', 'image/png'].includes(file.mimetype);
-        cb(ok ? null : new Error('Only .jpg and .png formats are allowed.'), ok);
-    },
-    limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
-});
-
-const withUpload = (req, res, next) =>
-    upload.single('avatar')(req, res, (err) =>
-        err ? res.status(400).json({ message: err.message }) : next()
-    );
 
 // --- helper: sanitize user payload for client ---
 const sanitizeUser = (u) =>
@@ -91,7 +64,7 @@ router.get('/me', protect, (req, res) => {
     return res.json(sanitizeUser(req.user));
 });
 
-router.post('/update', protect, withUpload, updateUserProfile);
+router.post('/update', protect, updateUserProfile);
 
 // --- OAuth: Google ---
 router.get('/google', (req, res, next) => {

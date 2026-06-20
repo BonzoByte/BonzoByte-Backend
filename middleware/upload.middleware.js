@@ -2,22 +2,30 @@
 import path from 'path';
 import fs from 'fs';
 
-const tmpDir = path.resolve('uploads/tmp');
+const ALLOWED_IMAGE_TYPES = new Map([
+    ['.jpg', 'image/jpeg'],
+    ['.jpeg', 'image/jpeg'],
+    ['.png', 'image/png'],
+    ['.webp', 'image/webp'],
+]);
+
+const tmpDir = path.resolve('.tmp/avatar-uploads');
 fs.mkdirSync(tmpDir, { recursive: true });
 
 const storage = multer.diskStorage({
     destination(req, file, cb) {
-        cb(null, tmpDir); // privremeno u /uploads/tmp
+        cb(null, tmpDir);
     },
     filename(req, file, cb) {
-        // random ime; ionako ćemo ga preraditi u kontroleru
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        const ext = path.extname(file.originalname || '').toLowerCase();
+        cb(null, `avatar-${uniqueSuffix}${ext}`);
     },
 });
 
 const fileFilter = (req, file, cb) => {
-    const ok = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const ok = ALLOWED_IMAGE_TYPES.get(ext) === file.mimetype;
     cb(ok ? null : new Error('INVALID_FILE_TYPE'), ok);
 };
 

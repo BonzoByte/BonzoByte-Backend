@@ -1,6 +1,7 @@
 /data/
 node_modules/
 dist/
+.tmp/
 .env
 .env.*
 npm-debug.log*

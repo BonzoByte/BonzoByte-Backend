@@ -538,7 +538,9 @@ export const updateUserProfile = async (req, res) => {
     const updatedData = { nickname };
 
     if (req.file) {
-      updatedData.avatarUrl = `${process.env.BASE_URL}/uploads/${req.file.filename}`;
+      return res.status(400).json({
+        message: 'Avatar uploads must use /api/users/updateUserProfile.',
+      });
     }
 
     const updatedUser = await User.findByIdAndUpdate(userId, updatedData, { new: true });

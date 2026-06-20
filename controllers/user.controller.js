@@ -38,28 +38,37 @@ export const updateUserProfile = async (req, res) => {
         if (nickname) user.nickname = nickname;
         if (req.body.country) user.country = req.body.country;
 
-        // ✅ AVATAR — jedan file po useru
         if (req.file) {
             const avatarsDir = path.resolve('uploads/avatars');
+            const avatarTmpDir = path.resolve('.tmp/avatar-uploads');
             fs.mkdirSync(avatarsDir, { recursive: true });
+            fs.mkdirSync(avatarTmpDir, { recursive: true });
 
-            const outName = `${req.user.id}.webp`; // fiksno ime po userId
+            const outName = `${req.user.id}.webp`;
             const outPath = path.join(avatarsDir, outName);
+            const tempOutPath = path.join(avatarTmpDir, `${req.user.id}-${Date.now()}.webp`);
 
-            // preradi u 256x256 webp (ako želiš bez sharp-a, vidi varijantu #2)
-            await sharp(req.file.path)
-                .resize(256, 256, { fit: 'cover' })
-                .webp({ quality: 82 })
-                .toFile(outPath);
+            // Decode and re-encode uploads so the public avatar is always a small WebP.
+            try {
+                await sharp(req.file.path, {
+                    failOn: 'warning',
+                    limitInputPixels: 4096 * 4096,
+                })
+                    .rotate()
+                    .resize(256, 256, { fit: 'cover' })
+                    .webp({ quality: 82 })
+                    .toFile(tempOutPath);
 
-            // obriši privremeni upload
-            try { fs.unlinkSync(req.file.path); } catch { }
+                fs.renameSync(tempOutPath, outPath);
+            } catch {
+                return res.status(400).json({ message: 'Invalid avatar image.' });
+            } finally {
+                try { fs.unlinkSync(req.file.path); } catch { }
+                try { fs.unlinkSync(tempOutPath); } catch { }
+            }
 
-            // URL + cache-bust
-            const baseUrl = `${req.protocol}://${req.get('host')}`; // npr. http://localhost:5000
+            const baseUrl = `${req.protocol}://${req.get('host')}`;
             user.avatarUrl = `${baseUrl}/uploads/avatars/${outName}?v=${Date.now()}`;
-        } else if (req.body.avatarUrl) {
-            user.avatarUrl = req.body.avatarUrl;
         }
 
         await user.save();
