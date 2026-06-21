@@ -1,4 +1,3 @@
-// controllers/auth.controller.js
 import User from '../models/user.model.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
@@ -10,7 +9,6 @@ import asyncHandler from 'express-async-handler';
 import transporter from '../utils/mailer.js';
 import { getEntitlements } from '../utils/entitlements.js';
 
-// ✅ Helper funkcija za slanje odgovora s greškom
 const handleError = (res, statusCode, message) => {
   return res.status(statusCode).json({ message });
 };
@@ -34,9 +32,7 @@ const isValidResetToken = (value) => /^[a-f0-9]{64}$/i.test(String(value || ''))
 const sendResetPasswordRequestResponse = (res) =>
   res.status(200).json({ message: RESET_PASSWORD_REQUEST_MESSAGE });
 
-// ✅ REGISTER (auto-login; optional auto-verify when EMAIL_DISABLED=1)
-// - sends verification email (best effort)
-// - NEVER blocks response if mail fails (prevents frontend "Registering..." forever)
+// Registration keeps email delivery best-effort so account creation is not blocked by mail outages.
 export const registerUser = async (req, res) => {
   try {
     const { email, password, nickname, name, country } = req.body;
@@ -108,7 +104,7 @@ export const registerUser = async (req, res) => {
       provider: ['local'],
       createdVia: 'manual',
 
-      // ✅ dok nema maila: auto-verify
+      // EMAIL_DISABLED allows local registration flows to proceed without outbound mail.
       isVerified: emailDisabled ? true : false,
       isUser: emailDisabled ? true : false,
 
@@ -120,18 +116,16 @@ export const registerUser = async (req, res) => {
       ads: { enabled: true, disabledReason: 'trial' },
     });
 
-    // ✅ samo ako mail radi
     if (!emailDisabled) {
       try {
         const verificationToken = generateVerificationToken(user._id);
         await sendVerificationEmail(user.email, user, verificationToken);
       } catch (err) {
         console.error('[REGISTER] Verification email failed (new user):', err);
-        // ne rušimo registraciju
+        // Keep registration successful even if verification email delivery fails.
       }
     }
 
-    // ✅ auto-login: vrati token + user
     const token = generateToken(user._id.toString(), user.tokenVersion);
 
     return res.status(201).json({
@@ -172,7 +166,6 @@ export const registerUser = async (req, res) => {
   }
 };
 
-// ✅ LOGIN (robust + radi s password: select:false)
 export const loginUser = async (req, res) => {
   try {
     const { identifier, password } = req.body;
@@ -188,7 +181,7 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // 🔥 KLJUČNO: uzmi password iako je select:false u schemi
+    // Password is select:false in the schema, so login must opt in explicitly.
     const user = await User.findOne({
       $or: [{ email: idf }, { nickname: idf }],
     }).select('+password');
@@ -246,7 +239,6 @@ export const loginUser = async (req, res) => {
   }
 };
 
-// ✅ LOGOUT
 export const logoutUser = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -266,7 +258,6 @@ export const logoutUser = async (req, res) => {
   }
 };
 
-// ✅ VERIFY EMAIL
 export const verifyEmail = async (req, res) => {
   try {
     const { token } = req.body;
@@ -287,7 +278,6 @@ export const verifyEmail = async (req, res) => {
   }
 };
 
-// ✅ RESEND VERIFY EMAIL (NE blokira response)
 export const resendVerificationEmail = async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -302,7 +292,7 @@ export const resendVerificationEmail = async (req, res) => {
 
     const token = generateVerificationToken(user._id);
 
-    // ✅ fire-and-forget
+    // Queue verification email so resend responses do not block on mail delivery.
     sendVerificationEmail(user.email, user, token)
       .then(() => console.log('[RESEND] Verification email sent:', user.email))
       .catch((err) => console.warn('[RESEND] Verification email failed:', err?.message || err));
@@ -343,6 +333,7 @@ async function requestPasswordReset(req, res) {
       }
     }
 
+    // Always return the same response so reset requests do not reveal account existence.
     return sendResetPasswordRequestResponse(res);
   } catch (err) {
     console.error('[RESET REQUEST ERROR]:', err);
@@ -381,7 +372,7 @@ export async function resetPassword(req, res) {
       return res.status(400).json({ message: RESET_PASSWORD_INVALID_MESSAGE });
     }
 
-    user.password = password; // plaintext -> pre-save hook hashira
+    user.password = password; // The pre-save hook hashes this plaintext value.
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     user.tokenVersion = (user.tokenVersion ?? 0) + 1;
@@ -439,7 +430,7 @@ export const getMe = (req, res) => {
   });
 };
 
-// ✅ DEV ONLY: force-verify user (for testing trial/login without emails)
+// Development-only endpoint for local verification testing without email delivery.
 export const devVerifyUser = async (req, res) => {
   try {
     if (!isExplicitDevVerifyEnabled()) {
