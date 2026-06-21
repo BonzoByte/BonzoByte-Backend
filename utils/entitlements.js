@@ -38,25 +38,9 @@ export function getEntitlements(u) {
     };
 }
 
-// future match details lock: 2h before start (as agreed)
-// export function canAccessFutureMatchDetails(u, expectedStartUtc, lockHours = 2) {
-//     // ✅ DEV/TEST: force lock (for UI testing)
-//     const forceLock =
-//         String(process.env.DETAILS_LOCK_TEST_MODE || '').toLowerCase() === 'true' ||
-//         String(process.env.DETAILS_LOCK_TEST_MODE || '') === '1';
-
-//     if (forceLock) return false;
-
-//     // privileged -> always allowed
-//     if (u?.isAdmin) return true;
-//     if (isPremium(u) || hasActiveTrial(u)) return true;
-
-//     const start = new Date(expectedStartUtc);
-//     const unlockAt = new Date(start.getTime() - lockHours * 60 * 60 * 1000);
-//     return getNow() >= unlockAt;
-// }
+// Future match details unlock shortly before the expected start time unless the user is privileged.
 export function canAccessFutureMatchDetails(u, expectedStartUtc, lockHours = 2) {
-    // 🔥 DEV override
+    // Allows local UI testing of the locked-state branch without changing user data.
     if (process.env.DEV_FORCE_LOCK === '1') {
         return false;
     }
