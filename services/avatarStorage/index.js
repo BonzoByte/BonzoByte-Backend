@@ -1,6 +1,20 @@
+import { env } from '../../config/env.js';
 import * as localAvatarStorage from './localAvatarStorage.js';
+import * as r2AvatarStorage from './r2AvatarStorage.js';
 
-const driver = localAvatarStorage;
+function selectDriver() {
+    switch (env.AVATAR_STORAGE_DRIVER) {
+        case 'local':
+            return localAvatarStorage;
+        case 'r2':
+            r2AvatarStorage.assertConfigured();
+            return r2AvatarStorage;
+        default:
+            throw new Error(`Unsupported avatar storage driver: ${env.AVATAR_STORAGE_DRIVER}`);
+    }
+}
+
+const driver = selectDriver();
 
 export function getPublicUrl(key, options) {
     return driver.getPublicUrl(key, options);

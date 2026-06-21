@@ -1,25 +1,15 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { env } from '../../config/env.js';
+import { buildAvatarKey, joinPublicUrl } from './avatarStoragePaths.js';
 
-const AVATAR_ROOT = path.resolve('uploads/avatars');
-const AVATAR_PREFIX = 'avatars';
-
-function buildKey(userId, version) {
-    return `${AVATAR_PREFIX}/${String(userId)}/avatar-${String(version)}.webp`;
-}
-
-function publicPathForKey(key) {
-    return key.split('/').map(encodeURIComponent).join('/');
-}
+const LOCAL_UPLOAD_ROOT = path.resolve('uploads');
 
 function resolveStoragePath(key) {
     const normalizedKey = String(key || '').replace(/\\/g, '/');
-    const relativeKey = normalizedKey.startsWith(`${AVATAR_PREFIX}/`)
-        ? normalizedKey.slice(AVATAR_PREFIX.length + 1)
-        : normalizedKey;
-    const resolved = path.resolve(AVATAR_ROOT, relativeKey);
+    const resolved = path.resolve(LOCAL_UPLOAD_ROOT, normalizedKey);
 
-    if (!resolved.startsWith(`${AVATAR_ROOT}${path.sep}`)) {
+    if (!resolved.startsWith(`${LOCAL_UPLOAD_ROOT}${path.sep}`)) {
         throw new Error('Invalid avatar key.');
     }
 
@@ -27,12 +17,11 @@ function resolveStoragePath(key) {
 }
 
 export function getPublicUrl(key, { baseUrl } = {}) {
-    if (!key || !baseUrl) return null;
-    return `${String(baseUrl).replace(/\/$/, '')}/uploads/${publicPathForKey(key)}`;
+    return joinPublicUrl(baseUrl ? `${String(baseUrl).replace(/\/$/, '')}/uploads` : null, key);
 }
 
 export async function saveAvatar(buffer, { userId, version, baseUrl } = {}) {
-    const key = buildKey(userId, version);
+    const key = buildAvatarKey({ userId, version, prefix: env.AVATAR_STORAGE_PREFIX });
     const targetPath = resolveStoragePath(key);
 
     await fs.mkdir(path.dirname(targetPath), { recursive: true });

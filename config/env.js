@@ -8,6 +8,21 @@ const asOptionalUrl = z.preprocess(
     z.string().url().optional()
 );
 
+const asOptionalString = z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional()
+);
+
+const asStringDefault = (defaultValue) => z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().default(defaultValue)
+);
+
+const asStorageDriver = z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toLowerCase() : undefined),
+    z.enum(['local', 'r2']).default('local')
+);
+
 const Env = z.object({
     FRONTEND_URL: z.string().url().default('https://bonzo-byte-frontend.vercel.app'),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -54,6 +69,15 @@ const Env = z.object({
     R2_ACCOUNT_ID: z.string().optional(),
     R2_ACCESS_KEY_ID: z.string().optional(),
     R2_SECRET_ACCESS_KEY: z.string().optional(),
+
+    AVATAR_STORAGE_DRIVER: asStorageDriver,
+    AVATAR_PUBLIC_BASE_URL: asOptionalUrl,
+    AVATAR_R2_BUCKET: asOptionalString,
+    AVATAR_R2_ACCOUNT_ID: asOptionalString,
+    AVATAR_R2_ENDPOINT: asOptionalUrl,
+    AVATAR_R2_ACCESS_KEY_ID: asOptionalString,
+    AVATAR_R2_SECRET_ACCESS_KEY: asOptionalString,
+    AVATAR_STORAGE_PREFIX: asStringDefault('avatars'),
 });
 
 const parsed = Env.safeParse(process.env);

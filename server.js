@@ -164,7 +164,7 @@ if (!ARCHIVES_ONLY) {
 app.use((err, req, res, next) => {
     if (err instanceof MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ message: 'File too large (max 2MB).' });
+            return res.status(400).json({ message: 'File too large (max 5MB).' });
         }
         return res.status(400).json({ message: `Upload error: ${err.code}` });
     }
