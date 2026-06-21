@@ -294,7 +294,6 @@ export const resendVerificationEmail = async (req, res) => {
 
     // Queue verification email so resend responses do not block on mail delivery.
     sendVerificationEmail(user.email, user, token)
-      .then(() => console.log('[RESEND] Verification email sent:', user.email))
       .catch((err) => console.warn('[RESEND] Verification email failed:', err?.message || err));
 
     return res.status(200).json({ message: 'Verifikacijski email ponovno poslan.', emailStatus: 'queued' });
@@ -498,8 +497,6 @@ export const contactUs = asyncHandler(async (req, res) => {
     return res.status(500).json({ message: 'Mail recipient not configured on server.' });
   }
 
-  console.log('[CONTACT] To:', TO, 'From:', email, 'Len:', message?.length);
-
   try {
     await transporter.sendMail({
       to: TO,
@@ -513,7 +510,6 @@ export const contactUs = asyncHandler(async (req, res) => {
       `,
     });
 
-    console.log('[CONTACT] Mail sent to', TO);
     return res.json({ message: 'Message sent.' });
   } catch (err) {
     console.error('[CONTACT] sendMail error:', err);
@@ -542,7 +538,7 @@ export const updateUserProfile = async (req, res) => {
 
     res.status(200).json({ user: updatedUser });
   } catch (err) {
-    console.error(err);
+    console.error('[AUTH UPDATE ERROR]:', err);
 
     if (err.code === 11000 && err.keyPattern?.nickname) {
       return res.status(409).json({ message: 'Taj nadimak je već zauzet.' });
