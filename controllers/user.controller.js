@@ -13,7 +13,6 @@ function getUserAvatarUrl(user, baseUrl) {
     return getPublicUrl(user?.avatarKey, { baseUrl }) || user?.avatarUrl || null;
 }
 
-// ✅ GET PROFILE
 export const getUserProfile = async (req, res) => {
     try {
       const user = await User.findById(req.user.id).populate('country', 'countryShort countryFull');
@@ -97,7 +96,7 @@ export const updateUserProfile = async (req, res) => {
         return res.status(200).json({
             message: 'Profil ažuriran.',
             user: {
-                _id: updatedUser._id, // zgodno za frontend normalizeUser
+                _id: updatedUser._id, // Keeps the frontend normalizeUser compatibility path stable.
                 id: updatedUser._id,
                 name: updatedUser.name,
                 nickname: updatedUser.nickname,
