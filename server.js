@@ -122,10 +122,6 @@ const photosDirTrimmed = typeof photosDirRaw === 'string' ? photosDirRaw.trim() 
 if (photosDirTrimmed) {
     const PHOTOS_DIR = path.resolve(photosDirTrimmed);
 
-    console.log('[PLAYERS_PHOTO_DIR raw]   =', JSON.stringify(photosDirRaw));
-    console.log('[PLAYERS_PHOTO_DIR abs]   =', PHOTOS_DIR);
-    console.log('[PLAYERS_PHOTO_DIR exists]=', fs.existsSync(PHOTOS_DIR));
-
     if (fs.existsSync(PHOTOS_DIR)) {
         app.use(
             '/static/players/photo',

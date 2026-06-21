@@ -16,7 +16,6 @@ function getUserAvatarUrl(user, baseUrl) {
 // ✅ GET PROFILE
 export const getUserProfile = async (req, res) => {
     try {
-        console.log('bla');
       const user = await User.findById(req.user.id).populate('country', 'countryShort countryFull');
   
       if (!user) return res.status(404).json({ message: 'Korisnik nije pronađen.' });
