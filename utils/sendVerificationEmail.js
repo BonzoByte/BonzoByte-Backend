@@ -15,7 +15,7 @@ export default async function sendVerificationEmail(toEmail, user, token) {
     process.env.EMAIL_USER || // fallback
     'noreply@example.com';    // last resort (ali bolje postavi EMAIL_FROM)
 
-  const fromName = env.EMAIL_FROM_NAME || process.env.EMAIL_FROM_NAME || 'BonzoByte';
+  const fromName = env.EMAIL_FROM_NAME || 'BonzoByte';
   const from = `${fromName} <${fromAddress}>`;
 
   const subject = 'Verify your email';

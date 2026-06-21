@@ -33,7 +33,6 @@ const Env = z.object({
     JWT_EXPIRES_IN: z.string().default('1d'),
     JWT_VERIFICATION_EXPIRES_IN: z.string().default('1h'),
     DETAILS_LOCK_TEST_MODE: z.string().optional(),
-    DETAILS_LOCK_TEST_MODE: z.string().optional(),
     NOW_OVERRIDE_ISO: z.string().optional(),
 
     DETAILS_LOCK_HOURS: z.coerce
@@ -45,6 +44,7 @@ const Env = z.object({
 
     RESEND_API_KEY: z.string().optional(),
     EMAIL_FROM: z.string().optional(),
+    EMAIL_FROM_NAME: z.string().optional(),
     EMAIL_REPLY_TO: z.string().optional(),
 
     EMAIL_USER: z.string().email().optional(),
