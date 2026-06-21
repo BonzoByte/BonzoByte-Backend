@@ -36,7 +36,7 @@ export async function getTournamentTypeById(req, res) {
 
 export async function updateTournamentType(req, res) {
     try {
-        const updatedTournamentType = await Plays.findByIdAndUpdate(
+        const updatedTournamentType = await TournamentType.findByIdAndUpdate(
             req.params.id,
             req.body,
             { new: true }

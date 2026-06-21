@@ -32,7 +32,7 @@ export async function createTournamentEvent(req, res) {
 
 export async function updateTournamentEvent(req, res) {
     try {
-        const updatedTournamentEvent = await Plays.findByIdAndUpdate(
+        const updatedTournamentEvent = await TournamentEvent.findByIdAndUpdate(
             req.params.id,
             req.body,
             { new: true }

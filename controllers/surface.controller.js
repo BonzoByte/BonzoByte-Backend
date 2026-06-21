@@ -36,7 +36,7 @@ export async function getSurfaceById(req, res) {
 
 export async function updateSurface(req, res) {
     try {
-        const updatedSurface = await Plays.findByIdAndUpdate(
+        const updatedSurface = await Surface.findByIdAndUpdate(
             req.params.id,
             req.body,
             { new: true }

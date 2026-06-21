@@ -36,7 +36,7 @@ export async function getTournamentLevelById(req, res) {
 
 export async function updateTournamentLevel(req, res) {
     try {
-        const updatedTournamentLevel = await Plays.findByIdAndUpdate(
+        const updatedTournamentLevel = await TournamentLevel.findByIdAndUpdate(
             req.params.id,
             req.body,
             { new: true }
