@@ -34,6 +34,8 @@ const userSchema = new mongoose.Schema({
 
     // ✅ Dodatni info
     avatarUrl: { type: String, default: null },
+    avatarKey: { type: String, default: null },
+    avatarUpdatedAt: { type: Date, default: null },
     countryTPId: { type: Number, ref: 'Country' },
     gender: { type: String, enum: ['male', 'female', 'other'], default: 'other' },
     dateOfBirth: { type: Date },
