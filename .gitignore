@@ -2,6 +2,7 @@
 node_modules/
 dist/
 .tmp/
+uploads/avatars/
 .env
 .env.*
 npm-debug.log*

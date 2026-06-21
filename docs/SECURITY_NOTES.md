@@ -36,16 +36,15 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Resolved: Angular clears stale sessions on first-party authorized API `401` responses, while public auth flows and `403` authorization responses remain feature-level handling.
 - Resolved: Avatar uploads now use a non-public temp directory, server-side image decode/re-encode cleanup, and the legacy auth update route no longer accepts direct avatar file uploads.
 - Resolved: Avatar storage now has a local default driver plus an R2/S3-compatible driver selected by `AVATAR_STORAGE_DRIVER`, with avatar-specific `AVATAR_*` environment keys separate from archive `R2_*` keys. Production deployments should explicitly set `AVATAR_STORAGE_DRIVER=r2`.
+- Resolved: Tracked `uploads/avatars/` files were removed from the git index and the runtime avatar upload directory is ignored.
 
 ## Known Risks And Follow-Up Items
 
 - Low/Accepted: Password reset links still carry a raw one-time token in the URL fragment so the browser can submit it; treat reset links as sensitive.
-- Unknown: `uploads/avatars/` currently contains tracked user-upload/avatar assets. This is accepted as current known project state, but it should not be treated as the long-term production storage model. Long-term, user-uploaded avatars should move to object storage/CDN, with the backend storing references, URLs, or metadata rather than binary uploads in git. Do not refactor avatar upload/storage casually because it affects frontend profile UI, backend upload middleware, stored user avatar paths, and deployed/static asset behavior.
-- Follow-up: Remove tracked avatar uploads from git in a separate cleanup commit after the R2/S3 avatar storage configuration is ready.
 
 ## Recommended Order
 
-1. Review avatar storage architecture and move user-uploaded avatars out of git-tracked assets.
+1. No open avatar storage architecture items remain in this document.
 
 ## Do Not Do Blindly
 
