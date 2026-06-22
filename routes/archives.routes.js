@@ -752,16 +752,12 @@ router.get('/players/ts/:playerTPId', optionalAuth, async (req, res) => {
 async function servePlayerTsArchive(req, res) {
     const playerTPId = String(req.params.playerTPId || '').trim();
 
-    console.log('[player-ts] incoming playerTPId =', playerTPId);
-
     if (!/^\d{1,12}$/.test(playerTPId)) {
         return res.status(400).json({ message: 'Invalid playerTPId format.' });
     }
 
     try {
         const brBuf = await readArchiveBuffer('players/ts', playerTPId);
-
-        console.log('[player-ts] readArchiveBuffer OK, bytes =', brBuf?.length ?? 0);
 
         res.setHeader('Content-Type', 'application/octet-stream');
         res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
@@ -772,7 +768,7 @@ async function servePlayerTsArchive(req, res) {
     } catch (err) {
         console.error('[player-ts] readArchiveBuffer FAILED', err);
 
-        // hard fallback probe: direktno čitanje fajla
+        // Keep this compatibility fallback for legacy local TS archive layouts.
         const fullPath = path.join(
             'd:/Development/My Projects/BonzoByteRoot/StaticFiles/Data/archives',
             'players',
@@ -780,13 +776,9 @@ async function servePlayerTsArchive(req, res) {
             `${playerTPId}.br`
         );
 
-        console.log('[player-ts] trying direct path =', fullPath);
-
         const stat = await fs.stat(fullPath);
-        console.log('[player-ts] direct file exists, size =', stat.size);
 
         const brBuf = await fs.readFile(fullPath);
-        console.log('[player-ts] direct read OK, bytes =', brBuf.length);
 
         res.setHeader('Content-Type', 'application/octet-stream');
         res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
