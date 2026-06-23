@@ -101,6 +101,7 @@ const PLAYER_MATCHES_DIR =
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\matches';
 
 const PLAYER_TS_DIR =
+    process.env.BROTLI_TS_DIR ||
     process.env.BROTLI_PLAYERS_MATCHES_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\ts';
 
@@ -238,6 +239,10 @@ async function readArchiveBuffer(kind, name) {
 
         case 'players/matches':
             key = `players/matches/${name}.br`;
+            break;
+
+        case 'players/ts':
+            key = `players/ts/${name}.br`;
             break;
 
         case 'tournaments/matches':
