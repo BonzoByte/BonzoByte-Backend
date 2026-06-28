@@ -681,22 +681,9 @@ router.get('/matches/:id', optionalAuth, async (req, res) => {
 });
 
 // GET /api/archives/match-details/:id
-router.get('/match-details/:id', async (req, res) => {
+router.get('/match-details/:id', optionalAuth, async (req, res) => {
     try {
-        const id = String(req.params.id || '').trim();
-
-        if (!/^\d{5,12}$/.test(id)) {
-            return res.status(400).json({ message: 'Invalid id format.' });
-        }
-
-        const brBuf = await readArchiveBuffer('matches', id);
-
-        res.setHeader('Content-Type', 'application/octet-stream');
-        res.setHeader('Content-Disposition', `inline; filename="${id}.br"`);
-        res.setHeader('Cache-Control', 'public, max-age=300');
-        res.setHeader('X-BB-Route', 'match-details');
-
-        return res.send(brBuf);
+        return await serveMatchDetails(req, res);
     } catch (e) {
         console.error('❌ /archives/match-details error:', e);
         return res.status(500).json({ message: 'Failed to read archive.' });
