@@ -29,8 +29,6 @@ export default async function sendVerificationEmail(toEmail, user, token) {
     </p>
   `;
 
-  console.log('[MAIL] verification sending to:', to);
-
   try {
     const resp = await transporter.sendMail({
       to,
@@ -41,10 +39,13 @@ export default async function sendVerificationEmail(toEmail, user, token) {
       html,
     });
 
-    console.log('[MAIL] verification sent:', resp?.messageId || resp?.response || 'OK');
     return resp;
   } catch (err) {
-    console.warn('[MAIL] verification failed:', err?.code || err?.message || err);
+    console.warn(
+      '[MAIL] verification failed:',
+      err?.code || 'MAIL_SEND_FAILED',
+      err?.message || 'Unknown mail delivery error.'
+    );
     throw err;
   }
 }

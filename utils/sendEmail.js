@@ -9,8 +9,6 @@ const sendEmail = async ({ to, subject, html }) => {
     subject,
     html
   });
-
-  console.log('[MAILER] Email poslan na:', to);
 };
 
 export default sendEmail;
