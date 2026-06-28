@@ -5,13 +5,13 @@ import protect, { isUser, isAdmin } from '../middleware/auth.middleware.js';
 
 router.get("/filter", filterMatches);
 router.get("/paginated", getPaginatedMatches);
+router.get("/by-date/:date", getMatchesByDate);
+router.get("/summaries", getAllMatchSummaries);
+router.get("/summaries/by-date/:date", getPaginatedMatchSummariesByDate);
 router.get("/", getAllMatches);
 router.post("/", protect, isAdmin, createMatch);
 router.get("/:id", getMatchById);
 router.put("/:id", protect, isAdmin, updateMatch);
 router.delete("/:id", protect, isAdmin, deleteMatch);
-router.get("/by-date/:date", getMatchesByDate);
-router.get("/summaries", getAllMatchSummaries);
-router.get("/summaries/by-date/:date", getPaginatedMatchSummariesByDate);
 
 export default router;
