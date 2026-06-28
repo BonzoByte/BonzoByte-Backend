@@ -713,7 +713,7 @@ router.get('/ts/:playerTPId', async (req, res) => {
         let brBuffer = null;
 
         if ((process.env.ARCHIVES_SOURCE || '').toLowerCase() === 'local') {
-            const baseDir = process.env.BROTLI_TS_DIR;
+            const baseDir = PLAYER_TS_DIR;
             const fullPath = path.join(baseDir, fileName);
 
             if (!fs.existsSync(fullPath)) {
