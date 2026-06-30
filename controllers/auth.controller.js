@@ -29,6 +29,11 @@ const hashResetPasswordToken = (token) =>
 
 const isValidResetToken = (value) => /^[a-f0-9]{64}$/i.test(String(value || ''));
 
+const safeMailError = (err) => ({
+  code: err?.code || 'MAIL_SEND_FAILED',
+  message: err?.message || 'Unknown mail delivery error.',
+});
+
 const sendResetPasswordRequestResponse = (res) =>
   res.status(200).json({ message: RESET_PASSWORD_REQUEST_MESSAGE });
 
@@ -121,7 +126,7 @@ export const registerUser = async (req, res) => {
         const verificationToken = generateVerificationToken(user._id);
         await sendVerificationEmail(user.email, user, verificationToken);
       } catch (err) {
-        console.error('[REGISTER] Verification email failed (new user):', err);
+        console.error('[REGISTER] Verification email failed (new user):', safeMailError(err));
         // Keep registration successful even if verification email delivery fails.
       }
     }
@@ -294,7 +299,7 @@ export const resendVerificationEmail = async (req, res) => {
 
     // Queue verification email so resend responses do not block on mail delivery.
     sendVerificationEmail(user.email, user, token)
-      .catch((err) => console.warn('[RESEND] Verification email failed:', err?.message || err));
+      .catch((err) => console.warn('[RESEND] Verification email failed:', safeMailError(err)));
 
     return res.status(200).json({ message: 'Verifikacijski email ponovno poslan.', emailStatus: 'queued' });
   } catch (error) {
@@ -327,7 +332,7 @@ async function requestPasswordReset(req, res) {
         try {
           await sendResetPasswordEmail(user.email, token);
         } catch (mailErr) {
-          console.warn('[RESET REQUEST EMAIL ERROR]:', mailErr?.message || mailErr);
+          console.warn('[RESET REQUEST EMAIL ERROR]:', safeMailError(mailErr));
         }
       }
     }
@@ -512,7 +517,7 @@ export const contactUs = asyncHandler(async (req, res) => {
 
     return res.json({ message: 'Message sent.' });
   } catch (err) {
-    console.error('[CONTACT] sendMail error:', err);
+    console.error('[CONTACT] sendMail error:', safeMailError(err));
     return res.status(500).json({ message: 'Mail sending failed.' });
   }
 });
