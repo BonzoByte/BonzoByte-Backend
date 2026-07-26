@@ -115,7 +115,9 @@ const TOURNAMENTS_INDEX_DIR =
 
 const ANALYTICS_DIR =
     process.env.BROTLI_ANALYTICS_DIR ||
-    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\analytics';
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\analytics';
+
+const ANALYTICS_MANIFEST_FILE = 'manifest.analytics.json';
 
 const R2 = {
     bucket: process.env.R2_BUCKET || '',
@@ -390,6 +392,39 @@ async function r2GetObjectBuffer(key) {
         if (name === 'NoSuchKey' || status === 404) return null;
         throw e;
     }
+}
+
+function parseAnalyticsArchiveName(manifestBuffer) {
+    const manifestText = manifestBuffer.toString('utf8').replace(/^\uFEFF/, '');
+    const manifest = JSON.parse(manifestText);
+    const fileName = String(manifest?.analytics?.url || '').trim();
+
+    if (
+        !fileName ||
+        fileName.includes('..') ||
+        fileName.includes('/') ||
+        fileName.includes('\\') ||
+        !/^analytics\.dashboard\.v\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z\.br$/i.test(fileName)
+    ) {
+        const err = new Error('Analytics manifest contains an invalid archive name.');
+        err.statusCode = 500;
+        throw err;
+    }
+
+    return fileName;
+}
+
+async function readAnalyticsDashboardBuffer() {
+    if (ARCHIVES_SOURCE === 'remote') {
+        const manifestBuffer = await fetchRemoteBrToBuffer(`analytics/${ANALYTICS_MANIFEST_FILE}`);
+        const fileName = parseAnalyticsArchiveName(manifestBuffer);
+        return await fetchRemoteBrToBuffer(`analytics/${fileName}`);
+    }
+
+    const manifestPath = path.join(ANALYTICS_DIR, ANALYTICS_MANIFEST_FILE);
+    const manifestBuffer = await fs.promises.readFile(manifestPath);
+    const fileName = parseAnalyticsArchiveName(manifestBuffer);
+    return await fs.promises.readFile(path.join(ANALYTICS_DIR, fileName));
 }
 
 /* ----------------------- Match details (guard) ---------------------- */
@@ -992,40 +1027,20 @@ router.get('/players/photo/:id', async (req, res) => {
 
 router.get('/analytics/dashboard', async (req, res, next) => {
     try {
-        const fileName = 'analytics-dashboard.br';
-
-        if (ARCHIVES_SOURCE === 'remote') {
-            assertR2Configured();
-
-            const key = `analytics/${fileName}`;
-
-            const out = await s3.send(new GetObjectCommand({
-                Bucket: R2.bucket,
-                Key: key,
-            }));
-
-            if (!out || !out.Body) {
-                return res.status(404).json({ message: 'Analytics archive not found.' });
-            }
-
-            const buf = await streamToBuffer(out.Body);
-
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Cache-Control', 'public, max-age=300');
-            return res.send(buf);
-        }
-
-        // local mode
-        const fullPath = path.join(ANALYTICS_DIR, fileName);
-
-        if (!fs.existsSync(fullPath)) {
-            return res.status(404).json({ message: 'Analytics archive not found.' });
-        }
+        const buf = await readAnalyticsDashboardBuffer();
 
         res.setHeader('Content-Type', 'application/octet-stream');
         res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.sendFile(fullPath);
+        return res.send(buf);
     } catch (err) {
+        if (
+            err?.code === 'ENOENT' ||
+            String(err?.name || '').includes('NoSuchKey') ||
+            err?.$metadata?.httpStatusCode === 404
+        ) {
+            return res.status(404).json({ message: 'Analytics archive not found.' });
+        }
+
         next(err);
     }
 });
