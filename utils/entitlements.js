@@ -1,4 +1,8 @@
 import { getNow } from './now.js';
+import {
+    DEFAULT_DETAILS_LOCK_HOURS,
+    evaluateDetailsAccess,
+} from './detailsAccessPolicy.js';
 
 export function hasActiveTrial(u) {
     const ends = u?.trial?.endsAt ? new Date(u.trial.endsAt) : null;
@@ -38,18 +42,20 @@ export function getEntitlements(u) {
     };
 }
 
-// Future match details unlock shortly before the expected start time unless the user is privileged.
-export function canAccessFutureMatchDetails(u, expectedStartUtc, lockHours = 2) {
-    // Allows local UI testing of the locked-state branch without changing user data.
-    if (process.env.DEV_FORCE_LOCK === '1') {
-        return false;
-    }
+export function hasPrivilegedMatchDetailsAccess(u) {
+    return Boolean(u?.isAdmin || isPremium(u) || hasActiveTrial(u));
+}
 
-    if (u?.isAdmin) return true;
-    if (isPremium(u) || hasActiveTrial(u)) return true;
-
-    const start = new Date(expectedStartUtc);
-    const unlockAt = new Date(start.getTime() - lockHours * 60 * 60 * 1000);
-
-    return getNow() >= unlockAt;
+// Compatibility wrapper for callers that only need the allow/deny result.
+export function canAccessFutureMatchDetails(
+    u,
+    expectedStartUtc,
+    lockHours = DEFAULT_DETAILS_LOCK_HOURS
+) {
+    return evaluateDetailsAccess({
+        isPrivileged: hasPrivilegedMatchDetailsAccess(u),
+        expectedStartUtc,
+        now: getNow(),
+        lockHours,
+    }).allowed;
 }

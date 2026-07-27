@@ -41,7 +41,7 @@ const Env = z.object({
         .number()
         .min(0)
         .max(24)
-        .default(2)
+        .default(1)
         .refine((n) => Number.isInteger(n), { message: 'DETAILS_LOCK_HOURS must be an integer.' }),
 
     RESEND_API_KEY: z.string().optional(),

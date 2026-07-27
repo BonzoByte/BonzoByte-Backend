@@ -5,8 +5,13 @@ import path from 'path';
 import zlib, { brotliDecompressSync } from 'zlib';
 import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { optionalAuth } from '../middleware/optionalAuth.js';
-import { canAccessFutureMatchDetails } from '../utils/entitlements.js';
+import { hasPrivilegedMatchDetailsAccess } from '../utils/entitlements.js';
+import {
+    evaluateDetailsAccess,
+    getDetailsCachePolicy,
+} from '../utils/detailsAccessPolicy.js';
 import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
+import { getNow, getNowDebug } from '../utils/now.js';
 import { env } from '../config/env.js';
 
 const router = Router();
@@ -77,7 +82,7 @@ const yyyymmddToIso = (yyyymmdd) =>
     `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
 
 // ✅ jedini “global” lock param — nema nikakvog res/return na top-levelu
-const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 2);
+const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 1);
 
 /* ------------------------------ Config ----------------------------- */
 
@@ -444,23 +449,34 @@ async function serveMatchDetails(req, res) {
     const json = JSON.parse(text);
 
     const expectedStartUtc = json?.m003;
-    const isFinished = !!json?.m656;
+    const finishedValue = json?.m656;
+    const isFinished =
+        finishedValue === true ||
+        finishedValue === 1 ||
+        finishedValue === '1' ||
+        finishedValue === 'true';
+    const user = req.user || null;
+    const access = evaluateDetailsAccess({
+        isFinished,
+        isPrivileged: hasPrivilegedMatchDetailsAccess(user),
+        expectedStartUtc,
+        now: getNow(),
+        lockHours: DETAILS_LOCK_HOURS,
+    });
+    const cache = getDetailsCachePolicy(access);
 
-    if (!isFinished) {
-        const user = req.user || null;
-        const allowed = canAccessFutureMatchDetails(user, expectedStartUtc, DETAILS_LOCK_HOURS);
-
-        if (!allowed) {
-            res.setHeader('Cache-Control', 'no-store');
-            res.setHeader('X-BB-Guard', '1');
-            res.setHeader('X-BB-Route', 'match-details');
-            return res.status(423).json(buildDetailsLockedResponse(expectedStartUtc, DETAILS_LOCK_HOURS));
-        }
+    if (!access.allowed) {
+        res.setHeader('Cache-Control', cache.cacheControl);
+        if (cache.varyAuthorization) res.vary('Authorization');
+        res.setHeader('X-BB-Guard', '1');
+        res.setHeader('X-BB-Route', 'match-details');
+        return res.status(423).json(buildDetailsLockedResponse(access));
     }
 
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${id}.br"`);
-    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Cache-Control', cache.cacheControl);
+    if (cache.varyAuthorization) res.vary('Authorization');
     res.setHeader('X-BB-Route', 'match-details');
 
     return res.send(brBuf);

@@ -37,6 +37,14 @@ No secrets, tokens, password hashes, connection strings, Mongo URI values, or co
 - Resolved: Avatar uploads now use a non-public temp directory, server-side image decode/re-encode cleanup, and the legacy auth update route no longer accepts direct avatar file uploads.
 - Resolved: Avatar storage now has a local default driver plus an R2/S3-compatible driver selected by `AVATAR_STORAGE_DRIVER`, with avatar-specific `AVATAR_*` environment keys separate from archive `R2_*` keys. Production deployments should explicitly set `AVATAR_STORAGE_DRIVER=r2`.
 - Resolved: Tracked `uploads/avatars/` files were removed from the git index and the runtime avatar upload directory is ignored.
+- Resolved: The backend is authoritative for match-details access. Finished matches, privileged users, and matches at or inside the one-hour start window are allowed; other future matches are locked. Privileged early responses are private and never shared-cacheable.
+
+## Match-details time fallback
+
+- Legacy archives use `00:00:00` when the source did not provide a start time. The ingestion pipeline can add synthetic milliseconds such as `.001` or `.002` only to preserve ordering; these remain unknown-time values. Archives do not yet carry a separate `hasKnownStartTime` flag, so a genuine midnight start cannot be distinguished from this fallback.
+- The conservative policy treats every midnight value as an unknown time: a free user remains locked through the listed UTC calendar day. Finished and privileged access still bypass this fallback, and old unfinished matches open after the listed day.
+- Legacy timestamps without an explicit offset are interpreted as UTC by both access-policy implementations so the backend and frontend do not apply different machine-local time zones.
+- A future archive schema should add an explicit known-time flag and an offset-bearing timestamp. That will allow genuine midnight starts to use the normal one-hour window.
 
 ## Known Risks And Follow-Up Items
 
