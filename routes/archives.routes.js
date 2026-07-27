@@ -107,7 +107,6 @@ const PLAYER_MATCHES_DIR =
 
 const PLAYER_TS_DIR =
     process.env.BROTLI_TS_DIR ||
-    process.env.BROTLI_PLAYERS_MATCHES_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\ts';
 
 const TOURNAMENT_MATCHES_DIR =
