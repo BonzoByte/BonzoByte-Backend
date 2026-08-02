@@ -690,7 +690,11 @@ router.get('/daily/:date', async (req, res) => {
             const resultText = formatResult(m.result || '');
             const resultDetailsText = formatResultDetails(m.resultDetails || '');
 
-            const odds = dashPairAligned(m.player1Odds, m.player2Odds, 2);
+            const odds = dashPairAligned(
+                m.player1Odds ?? m.l29,
+                m.player2Odds ?? m.l30,
+                2,
+            );
             const probs = dashPairAligned(m.winProbabilityPlayer1NN, m.winProbabilityPlayer2NN, 2);
 
             return {
@@ -712,7 +716,10 @@ router.get('/daily/:date', async (req, res) => {
             };
         });
 
-        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader(
+            'Cache-Control',
+            ARCHIVES_SOURCE === 'local' ? 'no-store' : 'public, max-age=300',
+        );
         res.json({ date, count: matches.length, matches });
     } catch (e) {
         console.error('❌ /archives/daily error:', e);
