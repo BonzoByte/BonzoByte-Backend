@@ -13,6 +13,7 @@ import {
 import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
 import { getNow, getNowDebug } from '../utils/now.js';
 import { env } from '../config/env.js';
+import { parseSimulationArchiveName } from '../utils/simulationArchiveManifest.js';
 
 const router = Router();
 const isArchiveDebugEnabled = () =>
@@ -122,6 +123,12 @@ const ANALYTICS_DIR =
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\analytics';
 
 const ANALYTICS_MANIFEST_FILE = 'manifest.analytics.json';
+
+const SIMULATION_DIR =
+    process.env.BROTLI_SIMULATION_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\simulation';
+
+const SIMULATION_MANIFEST_FILE = 'prediction-simulation.v1.manifest.json';
 
 const R2 = {
     bucket: process.env.R2_BUCKET || '',
@@ -429,6 +436,29 @@ async function readAnalyticsDashboardBuffer() {
     const manifestBuffer = await fs.promises.readFile(manifestPath);
     const fileName = parseAnalyticsArchiveName(manifestBuffer);
     return await fs.promises.readFile(path.join(ANALYTICS_DIR, fileName));
+}
+
+async function readSimulationManifestBuffer() {
+    if (ARCHIVES_SOURCE === 'remote') {
+        return await fetchRemoteBrToBuffer(
+            `simulation/${SIMULATION_MANIFEST_FILE}`
+        );
+    }
+
+    return await fs.promises.readFile(
+        path.join(SIMULATION_DIR, SIMULATION_MANIFEST_FILE)
+    );
+}
+
+async function readSimulationReportBuffer() {
+    const manifestBuffer = await readSimulationManifestBuffer();
+    const fileName = parseSimulationArchiveName(manifestBuffer);
+
+    if (ARCHIVES_SOURCE === 'remote') {
+        return await fetchRemoteBrToBuffer(`simulation/${fileName}`);
+    }
+
+    return await fs.promises.readFile(path.join(SIMULATION_DIR, fileName));
 }
 
 /* ----------------------- Match details (guard) ---------------------- */
@@ -1061,6 +1091,46 @@ router.get('/analytics/dashboard', async (req, res, next) => {
             err?.$metadata?.httpStatusCode === 404
         ) {
             return res.status(404).json({ message: 'Analytics archive not found.' });
+        }
+
+        next(err);
+    }
+});
+
+router.get('/simulation/manifest', async (_req, res, next) => {
+    try {
+        const buf = await readSimulationManifestBuffer();
+
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.send(buf);
+    } catch (err) {
+        if (
+            err?.code === 'ENOENT' ||
+            String(err?.name || '').includes('NoSuchKey') ||
+            err?.$metadata?.httpStatusCode === 404
+        ) {
+            return res.status(404).json({ message: 'Simulation manifest not found.' });
+        }
+
+        next(err);
+    }
+});
+
+router.get('/simulation/report', async (_req, res, next) => {
+    try {
+        const buf = await readSimulationReportBuffer();
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.send(buf);
+    } catch (err) {
+        if (
+            err?.code === 'ENOENT' ||
+            String(err?.name || '').includes('NoSuchKey') ||
+            err?.$metadata?.httpStatusCode === 404
+        ) {
+            return res.status(404).json({ message: 'Simulation archive not found.' });
         }
 
         next(err);
