@@ -1120,10 +1120,11 @@ router.get('/simulation/manifest', async (_req, res, next) => {
 router.get('/simulation/report', async (_req, res, next) => {
     try {
         const buf = await readSimulationReportBuffer();
+        const json = brotliDecompressSync(buf);
 
-        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.send(buf);
+        return res.send(json);
     } catch (err) {
         if (
             err?.code === 'ENOENT' ||
