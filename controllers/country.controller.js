@@ -2,7 +2,7 @@ import Country from "../models/country.model.js";
 
 export const getAllCountries = async (req, res) => {
     try {
-      const countries = await Country.find().sort({ countryFull: 1 }); // sortirano po nazivu
+      const countries = await Country.find().sort({ countryFull: 1 }); // Sort by display name.
       res.status(200).json(countries);
     } catch (err) {
       res.status(500).json({ message: 'Greška prilikom dohvaćanja zemalja.' });

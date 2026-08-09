@@ -56,7 +56,7 @@ export async function getTournamentEventWithMatches(req, res) {
     try {
         const tournamentTPId = parseInt(req.params.id);
 
-        // Dohvati turnir
+    // Load the tournament first so a missing identifier returns a clear 404.
         const tournamentEvent = await TournamentEvent.findOne({ _id: tournamentTPId })
             .populate("countryTPId", "countryShort countryFull")
             .populate("tournamentLevelId", "tournamentLevel")
@@ -66,7 +66,7 @@ export async function getTournamentEventWithMatches(req, res) {
             return res.status(404).json({ message: "TournamentEvent not found" });
         }
 
-        // Dohvati sve mečeve povezane s turnirom
+    // Load every match associated with the tournament.
         const matches = await Match.find(
             { tournamentEventTPId: tournamentTPId },
             {
@@ -81,7 +81,7 @@ export async function getTournamentEventWithMatches(req, res) {
                 winProbabilityNN: 1
             }
         )
-        .sort({ dateTime: 1 }) // kronološki po danima meča
+      .sort({ dateTime: 1 }) // Chronological match order.
         .populate({
             path: "player1TPId",
             select: "playerName countryTPId",

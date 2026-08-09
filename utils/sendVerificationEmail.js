@@ -13,7 +13,7 @@ export default async function sendVerificationEmail(toEmail, user, token) {
     env.EMAIL_FROM ||
     process.env.EMAIL_FROM ||
     process.env.EMAIL_USER || // fallback
-    'noreply@example.com';    // last resort (ali bolje postavi EMAIL_FROM)
+    'noreply@example.com';    // Last-resort fallback; production should configure EMAIL_FROM.
 
   const fromName = env.EMAIL_FROM_NAME || 'BonzoByte';
   const from = `${fromName} <${fromAddress}>`;

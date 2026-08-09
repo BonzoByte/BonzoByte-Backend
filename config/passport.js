@@ -4,7 +4,7 @@ import { Strategy as FacebookStrategy } from 'passport-facebook';
 import User from '../models/user.model.js';
 import { grantInitialTrialIfMissing } from '../utils/trial.js';
 
-// Helper: ensure providers array sadrži provider
+// Ensure the providers array contains the authenticated provider exactly once.
 function ensureProvider(user, providerName) {
     if (!Array.isArray(user.provider)) user.provider = [];
     if (!user.provider.includes(providerName)) user.provider.push(providerName);
@@ -23,13 +23,13 @@ passport.use(new GoogleStrategy(
             const name = profile.displayName || '';
             const avatarUrl = profile.photos?.[0]?.value;
 
-            // Tražimo po emailu ili googleId (ako nema emaila)
+        // Match by email, or by googleId when the provider supplies no email.
             let user = await User.findOne(
                 email ? { $or: [{ email }, { googleId }] } : { googleId }
             );
 
             if (user) {
-                // Update nedostajućih polja
+            // Fill fields that were unavailable during an earlier sign-in.
                 if (!user.googleId) user.googleId = googleId;
                 if (email && !user.email) user.email = email;
                 if (avatarUrl && !user.avatarUrl) user.avatarUrl = avatarUrl;
@@ -41,7 +41,7 @@ passport.use(new GoogleStrategy(
                 return done(null, user);
             }
 
-            // Kreiraj novog korisnika
+        // Create a new user when no linked identity exists.
             const newUser = await User.create({
                 name,
                 email,
@@ -82,7 +82,7 @@ passport.use(new FacebookStrategy(
             const name = [profile.name?.givenName, profile.name?.familyName].filter(Boolean).join(' ');
             const avatarUrl = profile.photos?.[0]?.value;
 
-            // Tražimo po emailu (ako postoji) ili facebookId
+        // Match by email when present; otherwise use facebookId.
             let user = await User.findOne(
                 email ? { $or: [{ email }, { facebookId }] } : { facebookId }
             );

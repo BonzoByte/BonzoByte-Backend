@@ -1,5 +1,5 @@
 export function grantInitialTrialIfMissing(user, days = 7) {
-    // ako već ima trial (aktivan ili istekao) -> ne diraj
+    // Never recreate a trial once one has been active or expired.
     if (user?.trial?.endsAt) return false;
   
     const now = new Date();
@@ -9,9 +9,9 @@ export function grantInitialTrialIfMissing(user, days = 7) {
       lastGrantedAt: now,
     };
   
-    // ads: metapodatak (stvarna odluka ide preko entitlements)
+    // Ads are metadata only; entitlement rules make the effective access decision.
     user.ads = user.ads || { enabled: true, disabledReason: 'manual' };
     user.ads.disabledReason = 'trial';
   
     return true;
-  }  
+}

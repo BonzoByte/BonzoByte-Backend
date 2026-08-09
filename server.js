@@ -42,7 +42,7 @@ const corsOptions = {
 
         const isAllowed =
             corsAllowlist.includes(origin) ||
-            origin.endsWith('.vercel.app'); // dopušta sve Vercel deploye
+            origin.endsWith('.vercel.app'); // Allow BonzoByte preview deployments hosted on Vercel.
 
         cb(isAllowed ? null : new Error('Not allowed by CORS'), isAllowed);
     },
@@ -97,7 +97,7 @@ if (!ARCHIVES_ONLY) {
 
 /* ------------------------------ Routes ----------------------------- */
 
-// ✅ root (da ne zbunjuje "Ruta nije pronađena")
+// A small root response distinguishes a healthy service from a missing route.
 app.get('/', (_req, res) => res.json({ ok: true, service: 'bonzobyte-backend' }));
 
 // ✅ health
@@ -116,7 +116,7 @@ app.use(
     })
 );
 
-// ✅ player photos (lokalno) — mount samo ako postoji
+// Mount local player photos only when the configured directory exists.
 const photosDirRaw = process.env.PLAYERS_PHOTO_DIR;
 const photosDirTrimmed = typeof photosDirRaw === 'string' ? photosDirRaw.trim() : '';
 if (photosDirTrimmed) {
@@ -140,7 +140,7 @@ if (photosDirTrimmed) {
     console.log('ℹ️ PLAYERS_PHOTO_DIR not set. Skipping photos static mount.');
 }
 
-// ✅ DB + auth rute samo ako nije archives-only
+// Database and authentication routes are disabled in archives-only mode.
 if (!ARCHIVES_ONLY) {
     app.use('/api/countries', countryRoutes);
     app.use('/api/plays', playsRoutes);
@@ -173,7 +173,7 @@ app.use((err, req, res, next) => {
     next(err);
 });
 
-// ✅ 404 (vrati i path da odmah znamo što je user zvao)
+// Include the requested path in 404 responses to simplify diagnostics.
 app.use((req, res) => res.status(404).json({ message: 'Ruta nije pronađena', path: req.originalUrl }));
 
 /* --------------------------- Start server --------------------------- */

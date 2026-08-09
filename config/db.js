@@ -12,6 +12,6 @@ export default async function connectDB() {
         console.log('MongoDB connected ✅');
     } catch (err) {
         console.error('MongoDB connection failed ❌', err.message);
-        throw err; // neka server ne krene bez baze
+        throw err; // Do not start the server without a database connection.
     }
 }

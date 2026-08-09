@@ -82,7 +82,7 @@ const dashPairAligned = (a, b, decimals = 2) => {
 const yyyymmddToIso = (yyyymmdd) =>
     `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
 
-// ✅ jedini “global” lock param — nema nikakvog res/return na top-levelu
+// Single shared details-lock duration; route handlers own all response control flow.
 const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 1);
 
 /* ------------------------------ Config ----------------------------- */
@@ -90,7 +90,7 @@ const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 1);
 const ARCHIVES_SOURCE = String(process.env.ARCHIVES_SOURCE || 'remote').trim().toLowerCase(); // 'remote' | 'local'
 const ARCHIVES_BASE_URL = process.env.ARCHIVES_BASE_URL || ''; // legacy
 
-// local dirs (samo za local mode)
+// Local archive directories are used only when ARCHIVES_SOURCE=local.
 const DAILY_DIR = process.env.BROTLI_DAILY_DIR || 'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\Archives\\daily';
 const MATCH_DETAILS_DIR = process.env.BROTLI_MATCH_DETAILS_DIR || 'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\Archives\\matches';
 
@@ -471,8 +471,8 @@ async function serveMatchDetails(req, res) {
 
     const brBuf = await readArchiveBuffer('matches', id);
 
-    // Backend smije privremeno dekomprimirati SAMO radi guard logike,
-    // ali klijentu vraćamo originalni .br buffer.
+// The backend may temporarily decompress match details only to evaluate access guards;
+// clients still receive the original Brotli buffer.
     const rawBuf = brotliDecompressSync(brBuf);
     const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
     const json = JSON.parse(text);
@@ -1059,7 +1059,7 @@ router.get('/players/photo/:id', async (req, res) => {
             return res.send(found.body);
         }
 
-        // normal player jpg (bez ekstenzije)
+        // Standard player JPEG name without an extension.
         const key = `players/photo/${id}.jpg`;
         const found = await r2GetObjectBufferWithMeta(key);
 
@@ -1120,6 +1120,8 @@ router.get('/simulation/manifest', async (_req, res, next) => {
 router.get('/simulation/report', async (_req, res, next) => {
     try {
         const buf = await readSimulationReportBuffer();
+        // API clients receive JSON so archive compression remains an implementation
+        // detail; direct static hosting continues to serve the versioned .br file.
         const json = brotliDecompressSync(buf);
 
         res.setHeader('Content-Type', 'application/json; charset=utf-8');

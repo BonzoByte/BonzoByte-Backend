@@ -62,11 +62,11 @@ export async function deletePlayer(req, res) {
 
 export async function getPaginatedPlayers(req, res) {
     try {
-        const page = parseInt(req.query.page) || 1;       // Trenutna stranica
-        const pageSize = parseInt(req.query.pageSize) || 100; // Broj zapisa po stranici
+    const page = parseInt(req.query.page) || 1;       // Current page.
+    const pageSize = parseInt(req.query.pageSize) || 100; // Rows per page.
     
-        const totalCount = await Player.countDocuments(); // Ukupan broj zapisa
-        const totalPages = Math.ceil(totalCount / pageSize); // Ukupan broj stranica
+    const totalCount = await Player.countDocuments(); // Total rows.
+    const totalPages = Math.ceil(totalCount / pageSize); // Total pages.
     
         const players = await Player.find()
           .skip((page - 1) * pageSize)
@@ -115,7 +115,7 @@ export async function getPlayerWithMatches(req, res) {
                 winProbabilityNN: 1
             }
         )
-        .sort({ dateTime: -1 }) // najnoviji prvi
+      .sort({ dateTime: -1 }) // Newest matches first.
         .populate({
             path: "tournamentEventTPId",
             select: "tournamentEventName countryTPId tournamentLevelId tournamentTypeId",

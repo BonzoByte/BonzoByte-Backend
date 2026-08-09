@@ -65,7 +65,7 @@ const Env = z.object({
 
     ARCHIVES_ONLY: z.string().optional(),
 
-    // ✅ default ALWAYS remote; local samo ako ga eksplicitno setamo u .env
+    // Default to remote storage; local mode must be explicitly enabled in .env.
     ARCHIVES_SOURCE: z.enum(['remote', 'local']).default('remote'),
 
     ARCHIVES_BASE_URL: asOptionalUrl,

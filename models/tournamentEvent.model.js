@@ -1,7 +1,7 @@
 import { Schema, model } from "mongoose";
 
 const tournamentEventSchema = new Schema({
-  _id: { type: Number, required: true }, // koristiš TPID kao _id — super
+  _id: { type: Number, required: true }, // TennisPrediction ID is the canonical document ID.
   tournamentEventName: { type: String, required: false, minlength: 0, maxlength: 100 },
   countryTPId: { type: Number, ref: "Country", required: false },
   tournamentEventDate: { type: Date, required: true },

@@ -17,13 +17,13 @@ const transporter = nodemailer.createTransport({
     secure: SMTP_SECURE,
     auth: EMAIL_USER && EMAIL_PASS ? { user: EMAIL_USER, pass: EMAIL_PASS } : undefined,
 
-    // ✅ timeouts (da ne visi 120s)
+    // Keep mail delivery from hanging for 120 seconds.
     connectionTimeout: 8000,
     greetingTimeout: 8000,
     socketTimeout: 12000,
 });
 
-// ✅ samo logiraj status (ne ruši app)
+  // Report delivery status without terminating the application.
 transporter
     .verify()
     .then(() => console.log('[MAILER] Transport ready'))

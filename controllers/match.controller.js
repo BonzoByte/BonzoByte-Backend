@@ -65,7 +65,7 @@ export async function getMatchesByDate(req, res) {
     try {
         const { date } = req.params;
 
-        // Pretvaranje YYYYMMDD u ISO datume
+    // Convert YYYYMMDD input to ISO date boundaries.
         const year = date.slice(0, 4);
         const month = date.slice(4, 6);
         const day = date.slice(6, 8);
@@ -86,11 +86,11 @@ export async function getMatchesByDate(req, res) {
 
 export async function getPaginatedMatches(req, res) {
     try {
-        const page = parseInt(req.query.page) || 1;       // Trenutna stranica
-        const pageSize = parseInt(req.query.pageSize) || 10; // Broj zapisa po stranici
+    const page = parseInt(req.query.page) || 1;       // Current page.
+    const pageSize = parseInt(req.query.pageSize) || 10; // Rows per page.
 
-        const totalCount = await Match.countDocuments(); // Ukupan broj zapisa
-        const totalPages = Math.ceil(totalCount / pageSize); // Ukupan broj stranica
+    const totalCount = await Match.countDocuments(); // Total rows.
+    const totalPages = Math.ceil(totalCount / pageSize); // Total pages.
 
         const matches = await Match.find()
             .skip((page - 1) * pageSize)
@@ -136,7 +136,7 @@ export async function getPaginatedMatchSummariesByDate(req, res) {
     try {
         const { date } = req.params;
 
-        // Pretvaranje YYYYMMDD u ISO datume
+    // Convert YYYYMMDD input to ISO date boundaries.
         const year = date.slice(0, 4);
         const month = date.slice(4, 6);
         const day = date.slice(6, 8);
@@ -240,7 +240,7 @@ export async function filterMatches(req, res) {
             if (endDate) matchQuery.dateTime.$lte = new Date(endDate);
         }
 
-        // Mečevi preko turnira → dohvatimo samo one turnire koji odgovaraju filterima
+        // Resolve matches through tournaments that satisfy the active filters.
         const tournamentFilter = {};
         if (countryId) tournamentFilter.countryTPId = parseInt(countryId);
         if (surfaceId) tournamentFilter.surfaceId = parseInt(surfaceId);

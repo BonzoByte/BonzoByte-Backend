@@ -7,7 +7,7 @@ const SUB_STATUS = ['none', 'active', 'past_due', 'canceled', 'expired'];
 const ADS_DISABLED_REASON = ['premium', 'trial', 'admin', 'manual'];
 
 const userSchema = new mongoose.Schema({
-    // ✅ Osnovni podaci
+    // Core identity fields.
     name: { type: String, required: true, trim: true },
     nickname: { type: String, trim: true, unique: true, sparse: true },
     email: { type: String, required: false, unique: true, lowercase: true, trim: true },
@@ -32,7 +32,7 @@ const userSchema = new mongoose.Schema({
     isVerified: { type: Boolean, default: false },
     isOnline: { type: Boolean, default: false },
 
-    // ✅ Dodatni info
+    // Optional profile metadata.
     avatarUrl: { type: String, default: null },
     avatarKey: { type: String, default: null },
     avatarUpdatedAt: { type: Date, default: null },
@@ -45,7 +45,7 @@ const userSchema = new mongoose.Schema({
     player1TPId: { type: Number, ref: 'Player' },
     player2TPId: { type: Number, ref: 'Player' },
 
-    // ✅ Reset lozinke
+    // Password-reset state.
     resetPasswordToken: { type: String, select: false, index: true },
     resetPasswordExpires: { type: Date, index: true },
     tokenVersion: { type: Number, default: 0 },
@@ -64,7 +64,7 @@ const userSchema = new mongoose.Schema({
         validUntil: { type: Date, default: null, index: true },
         customerId: { type: String, default: null },
         subscriptionId: { type: String, default: null },
-        // za “Founders Pass / lifetime”
+        // Used for Founders Pass and lifetime access.
         isLifetime: { type: Boolean, default: false, index: true },
     },
 
@@ -82,12 +82,12 @@ const userSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
-// 🛡️ Hash lozinke (ako je promijenjena) - ali NE hashiraj ako je već bcrypt hash
+// Hash a changed password, but never hash an existing bcrypt value again.
 userSchema.pre('save', async function (next) {
     try {
         if (!this.isModified('password') || !this.password) return next();
 
-        // Ako već izgleda kao bcrypt hash ($2a/$2b/$2y), preskoči hashing
+  // Preserve values that already use a recognized bcrypt prefix ($2a/$2b/$2y).
         if (/^\$2[aby]\$/.test(this.password)) return next();
 
         const salt = await bcrypt.genSalt(10);

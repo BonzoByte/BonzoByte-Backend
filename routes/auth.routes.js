@@ -23,7 +23,7 @@ import { env } from '../config/env.js';
 
 const router = express.Router();
 
-// Prefer env.FRONTEND_URL; fallback na localhost
+// Prefer env.FRONTEND_URL and fall back to localhost.
 const FRONTEND = env.FRONTEND_URL || 'http://localhost:4200';
 const isAuthDevToolEnabled = () =>
     String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
@@ -59,7 +59,7 @@ router.post('/resend-verification', resendVerificationEmail);
 router.post('/dev/verify', devVerifyUser);
 router.post('/contact', contactLimiter, contactUs);
 
-// /me – vrati trenutno prijavljenog korisnika (JWT u Authorization)
+// /me returns the current user identified by the Authorization JWT.
 router.get('/me', protect, (req, res) => {
     return res.json(sanitizeUser(req.user));
 });
