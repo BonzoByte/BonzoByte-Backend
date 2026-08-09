@@ -128,7 +128,7 @@ const SIMULATION_DIR =
     process.env.BROTLI_SIMULATION_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\simulation';
 
-const SIMULATION_MANIFEST_FILE = 'prediction-simulation.v1.manifest.json';
+const SIMULATION_MANIFEST_FILE = 'prediction-simulation.v2.manifest.json';
 
 const R2 = {
     bucket: process.env.R2_BUCKET || '',
@@ -1120,13 +1120,10 @@ router.get('/simulation/manifest', async (_req, res, next) => {
 router.get('/simulation/report', async (_req, res, next) => {
     try {
         const buf = await readSimulationReportBuffer();
-        // API clients receive JSON so archive compression remains an implementation
-        // detail; direct static hosting continues to serve the versioned .br file.
-        const json = brotliDecompressSync(buf);
-
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Encoding', 'br');
         res.setHeader('Cache-Control', 'public, max-age=300');
-        return res.send(json);
+        return res.send(buf);
     } catch (err) {
         if (
             err?.code === 'ENOENT' ||
