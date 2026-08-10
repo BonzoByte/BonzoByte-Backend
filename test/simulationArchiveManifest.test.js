@@ -4,11 +4,11 @@ import { parseSimulationArchiveName } from '../utils/simulationArchiveManifest.j
 
 const validManifest = {
     schema: 'bonzobyte.prediction-simulation.manifest',
-    schemaVersion: 3,
+    schemaVersion: 4,
     report: {
-        file: 'prediction-simulation.v3.aa59bf088225b6a5.json.br',
+        file: 'prediction-simulation.v4.aa59bf088225b6a5.json.br',
         schema: 'bonzobyte.prediction-simulation',
-        schemaVersion: 3,
+        schemaVersion: 4,
     },
 };
 
@@ -16,7 +16,7 @@ test('accepts the versioned local simulation report contract', () => {
     const buffer = Buffer.from(JSON.stringify(validManifest));
     assert.equal(
         parseSimulationArchiveName(buffer),
-        'prediction-simulation.v3.aa59bf088225b6a5.json.br'
+        'prediction-simulation.v4.aa59bf088225b6a5.json.br'
     );
 });
 
@@ -24,7 +24,7 @@ test('accepts a UTF-8 BOM on the manifest', () => {
     const buffer = Buffer.from(`\uFEFF${JSON.stringify(validManifest)}`);
     assert.equal(
         parseSimulationArchiveName(buffer),
-        'prediction-simulation.v3.aa59bf088225b6a5.json.br'
+        'prediction-simulation.v4.aa59bf088225b6a5.json.br'
     );
 });
 
@@ -32,7 +32,7 @@ test('rejects traversal and unversioned report names', () => {
     for (const file of [
         '../prediction-simulation.json.br',
         'prediction-simulation.json.br',
-        'prediction-simulation.v3.not-a-hash.json.br',
+        'prediction-simulation.v4.not-a-hash.json.br',
     ]) {
         const buffer = Buffer.from(JSON.stringify({
             ...validManifest,

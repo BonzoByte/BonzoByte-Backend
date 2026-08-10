@@ -1,5 +1,5 @@
 const simulationArchiveNamePattern =
-    /^prediction-simulation\.v3\.[0-9a-f]{16}\.json\.br$/i;
+    /^prediction-simulation\.v4\.[0-9a-f]{16}\.json\.br$/i;
 
 export function parseSimulationArchiveName(manifestBuffer) {
     const manifestText = manifestBuffer.toString('utf8').replace(/^\uFEFF/, '');
@@ -8,9 +8,9 @@ export function parseSimulationArchiveName(manifestBuffer) {
 
     if (
         manifest?.schema !== 'bonzobyte.prediction-simulation.manifest' ||
-        manifest?.schemaVersion !== 3 ||
+        manifest?.schemaVersion !== 4 ||
         manifest?.report?.schema !== 'bonzobyte.prediction-simulation' ||
-        manifest?.report?.schemaVersion !== 3 ||
+        manifest?.report?.schemaVersion !== 4 ||
         !simulationArchiveNamePattern.test(fileName)
     ) {
         const err = new Error(

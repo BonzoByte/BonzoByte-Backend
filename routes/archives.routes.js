@@ -128,7 +128,7 @@ const SIMULATION_DIR =
     process.env.BROTLI_SIMULATION_DIR ||
     'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\simulation';
 
-const SIMULATION_MANIFEST_FILE = 'prediction-simulation.v3.manifest.json';
+const SIMULATION_MANIFEST_FILE = 'prediction-simulation.v4.manifest.json';
 
 const R2 = {
     bucket: process.env.R2_BUCKET || '',
