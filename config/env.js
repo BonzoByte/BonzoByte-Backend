@@ -90,7 +90,7 @@ const Env = z.object({
     ARCHIVES_ONLY: z.string().optional(),
 
     // Default to remote storage; local mode must be explicitly enabled in .env.
-    ARCHIVES_SOURCE: z.enum(['remote', 'local', 'pending']).default('remote'),
+    ARCHIVES_SOURCE: z.enum(['remote', 'local', 'pending', 'publisher']).default('remote'),
 
     ARCHIVES_BASE_URL: asOptionalUrl,
     BROTLI_DAILY_DIR: asOptionalString,

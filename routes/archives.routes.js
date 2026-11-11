@@ -16,8 +16,13 @@ import { env } from '../config/env.js';
 import { parseSimulationArchiveName } from '../utils/simulationArchiveManifest.js';
 import { projectPublicDailyMatch } from '../utils/publicDailyMatch.js';
 import { loadLocalArchiveRuntime } from '../utils/localArchiveRuntime.js';
+import { createPrivateArchivesRouter } from './privateArchives.routes.js';
+import { readPrivateArchiveBuffer, locatePrivateArchiveDate, locatePrivateMatchById } from '../utils/privateArchiveRuntime.js';
 
 const router = Router();
+// The private reader terminates unknown requests instead of falling through to
+// legacy/public storage. Existing local and remote routes remain unchanged.
+if (env.ARCHIVES_SOURCE === 'publisher') router.use(createPrivateArchivesRouter());
 // Closed-beta access can be verified before the separately approved private
 // archive upload is ready. Never fall back to old legacy/public data meanwhile.
 if (env.ARCHIVES_SOURCE === 'pending') router.use((_req, res) => res.status(503)
@@ -39,11 +44,11 @@ const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 1);
 
 const ARCHIVES_SOURCE = String(process.env.ARCHIVES_SOURCE || 'remote').trim().toLowerCase(); // 'remote' | 'local'
 const ARCHIVES_BASE_URL = process.env.ARCHIVES_BASE_URL || ''; // legacy
-const { localRelease, reviewedConfig, recoveryReader, reviewedReports } = await loadLocalArchiveRuntime({
+const { localRelease, reviewedConfig, recoveryReader, reviewedReports } = ARCHIVES_SOURCE === 'publisher' ? {} : await loadLocalArchiveRuntime({
     settings: { ...process.env, NODE_ENV: env.NODE_ENV, APP_STAGE: env.APP_STAGE, ARCHIVES_SOURCE },
 });
-export const locateRecoveryArchiveDate = recoveryReader?.locateDate ?? null;
-export const locateRecoveryMatchById = recoveryReader?.locateMatchById ?? null;
+export const locateRecoveryArchiveDate = ARCHIVES_SOURCE === 'publisher' ? locatePrivateArchiveDate : recoveryReader?.locateDate ?? null;
+export const locateRecoveryMatchById = ARCHIVES_SOURCE === 'publisher' ? locatePrivateMatchById : recoveryReader?.locateMatchById ?? null;
 router.use((req,res,next) => {
     if(localRelease)res.setHeader('X-BonzoByte-Local-Release',localRelease.sha256);
     const report=reviewedReports?.get(req.path);
@@ -178,6 +183,7 @@ async function r2GetObjectBufferWithMeta(key) {
 }
 
 export async function readArchiveBuffer(kind, name, limits = {}) {
+    if (ARCHIVES_SOURCE === 'publisher') return readPrivateArchiveBuffer(kind, name, limits);
     // Preserve the normal authentication/entitlement routes. Replace only the
     // underlying read with the paused, hash-verified recovery archive source.
     if (recoveryReader) return recoveryReader.read(kind, name, limits);
