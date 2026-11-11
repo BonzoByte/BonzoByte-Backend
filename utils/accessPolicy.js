@@ -22,7 +22,10 @@ export function createCorsOptions(origins) {
     credentials: true, optionsSuccessStatus: 204 };
 }
 export const privateHeaders = { 'X-Robots-Tag': 'noindex, nofollow, noarchive',
-    'Cache-Control': 'private, no-store, max-age=0', 'CDN-Cache-Control': 'no-store', 'Vercel-CDN-Cache-Control': 'no-store' };
+    'Cache-Control': 'private, no-store, max-age=0', 'CDN-Cache-Control': 'no-store', 'Vercel-CDN-Cache-Control': 'no-store',
+    // Native same-origin form POSTs need their Origin. no-referrer makes it
+    // "null" in browsers; same-origin still hides referrers from other sites.
+    'Referrer-Policy': 'same-origin' };
 export function forcePrivateHeaders(_req, res, next) {
     const headers = Object.fromEntries(Object.entries(privateHeaders).map(([key, value]) => [key.toLowerCase(), value]));
     const original = res.setHeader.bind(res);
