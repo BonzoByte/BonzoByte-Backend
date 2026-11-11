@@ -1,0 +1,1095 @@
+﻿// routes/archives.routes.js
+import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
+import zlib, { brotliDecompressSync } from 'zlib';
+import { S3Client, ListObjectsV2Command, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { optionalAuth } from '../middleware/optionalAuth.js';
+import { hasPrivilegedMatchDetailsAccess } from '../utils/entitlements.js';
+import {
+    evaluateDetailsAccess,
+    getDetailsCachePolicy,
+} from '../utils/detailsAccessPolicy.js';
+import { buildDetailsLockedResponse } from '../utils/lockResponse.js';
+import { getNow, getNowDebug } from '../utils/now.js';
+import { env } from '../config/env.js';
+import { parseSimulationArchiveName } from '../utils/simulationArchiveManifest.js';
+import { projectPublicDailyMatch } from '../utils/publicDailyMatch.js';
+import { loadLocalArchiveRuntime } from '../utils/localArchiveRuntime.js';
+
+const router = Router();
+// Closed-beta access can be verified before the separately approved private
+// archive upload is ready. Never fall back to old legacy/public data meanwhile.
+if (env.ARCHIVES_SOURCE === 'pending') router.use((_req, res) => res.status(503)
+    .set('Cache-Control', 'private, no-store').json({ code: 'ARCHIVE_RELEASE_NOT_READY',
+        message: 'Match data is being prepared. Please try again later.' }));
+const isArchiveDebugEnabled = () =>
+    String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
+    String(process.env.DEV_BYPASS_VERIFY || '') === '1';
+
+/* ----------------------------- Helpers ----------------------------- */
+
+const yyyymmddToIso = (yyyymmdd) =>
+    `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+
+// Single shared details-lock duration; route handlers own all response control flow.
+const DETAILS_LOCK_HOURS = Number(env.DETAILS_LOCK_HOURS ?? 1);
+
+/* ------------------------------ Config ----------------------------- */
+
+const ARCHIVES_SOURCE = String(process.env.ARCHIVES_SOURCE || 'remote').trim().toLowerCase(); // 'remote' | 'local'
+const ARCHIVES_BASE_URL = process.env.ARCHIVES_BASE_URL || ''; // legacy
+const { localRelease, reviewedConfig, recoveryReader, reviewedReports } = await loadLocalArchiveRuntime({
+    settings: { ...process.env, NODE_ENV: env.NODE_ENV, APP_STAGE: env.APP_STAGE, ARCHIVES_SOURCE },
+});
+export const locateRecoveryArchiveDate = recoveryReader?.locateDate ?? null;
+export const locateRecoveryMatchById = recoveryReader?.locateMatchById ?? null;
+router.use((req,res,next) => {
+    if(localRelease)res.setHeader('X-BonzoByte-Local-Release',localRelease.sha256);
+    const report=reviewedReports?.get(req.path);
+    if (!report || !['GET','HEAD'].includes(req.method)) return next();
+    res.setHeader('Content-Type',report.type);
+    res.setHeader('Cache-Control','no-store');
+    res.setHeader('X-BonzoByte-Archive-Source','verified-derived-reports');
+    return res.send(report.body);
+});
+
+// Local archive directories are used only when ARCHIVES_SOURCE=local.
+const DAILY_DIR = process.env.BROTLI_DAILY_DIR || 'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\Archives\\daily';
+const MATCH_DETAILS_DIR = process.env.BROTLI_MATCH_DETAILS_DIR || 'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\Archives\\matches';
+
+const PLAYERS_INDEX_DIR =
+    process.env.BROTLI_PLAYERS_INDEX_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\indexBuild';
+
+const PLAYER_DETAILS_DIR =
+    process.env.BROTLI_PLAYERS_DETAILS_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\details';
+
+const PLAYER_MATCHES_DIR =
+    process.env.BROTLI_PLAYERS_MATCHES_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\matches';
+
+const PLAYER_TS_DIR =
+    process.env.BROTLI_TS_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\players\\ts';
+
+const TOURNAMENT_MATCHES_DIR =
+    process.env.BROTLI_TOURNAMENTS_MATCHES_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\tournaments\\matches';
+
+const TOURNAMENTS_INDEX_DIR =
+    process.env.BROTLI_TOURNAMENTS_INDEX_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\tournaments\\indexBuild';
+
+const ANALYTICS_DIR =
+    process.env.BROTLI_ANALYTICS_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\analytics';
+
+const ANALYTICS_MANIFEST_FILE = 'manifest.analytics.json';
+
+const SIMULATION_DIR =
+    process.env.BROTLI_SIMULATION_DIR ||
+    'd:\\Development\\My Projects\\BonzoByteRoot\\StaticFiles\\Data\\archives\\simulation';
+
+const SIMULATION_MANIFEST_FILE = 'prediction-simulation.v4.manifest.json';
+
+const R2 = {
+    bucket: process.env.R2_BUCKET || '',
+    accountId: process.env.R2_ACCOUNT_ID || '',
+    endpoint:
+        process.env.R2_ENDPOINT ||
+        (process.env.R2_ACCOUNT_ID ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : ''),
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+};
+
+function assertR2Configured() {
+    const required = ['R2_BUCKET', 'R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'];
+    const missing = required.filter((k) => !process.env[k] || String(process.env[k]).trim() === '');
+    if (missing.length) {
+        const msg = `R2 S3 not configured, missing: ${missing.join(', ')}`;
+        const err = new Error(msg);
+        err.statusCode = 500;
+        throw err;
+    }
+}
+
+if (ARCHIVES_SOURCE === 'remote') {
+    assertR2Configured();
+}
+
+const s3 =
+    ARCHIVES_SOURCE === 'remote' && R2.bucket && R2.endpoint && R2.accessKeyId && R2.secretAccessKey
+        ? new S3Client({
+            region: 'auto',
+            endpoint: R2.endpoint,
+            forcePathStyle: true,
+            credentials: { accessKeyId: R2.accessKeyId, secretAccessKey: R2.secretAccessKey },
+        })
+        : null;
+
+/* --------------------------- IO utilities --------------------------- */
+
+async function streamToBuffer(stream, maxBytes = Infinity, signal) {
+    const chunks = [];
+    let size = 0;
+    const abort = () => stream.destroy?.(signal.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+        signal?.throwIfAborted();
+        for await (const chunk of stream) {
+            signal?.throwIfAborted();
+            size += chunk.length;
+            if (size > maxBytes) throw new Error('Archive exceeds read limit');
+            chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+    } finally {
+        signal?.removeEventListener('abort', abort);
+        if (signal?.aborted) stream.destroy?.();
+    }
+}
+
+async function fetchRemoteBrToBuffer(key, limits = {}) {
+    if (!s3) throw new Error('R2 S3 is not configured for reading');
+    const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }),
+        limits.signal ? { abortSignal: limits.signal } : undefined);
+    if (!out.Body) throw new Error(`Empty body for key: ${key}`);
+    return await streamToBuffer(out.Body, limits.maxBytes, limits.signal);
+}
+
+async function r2GetObjectBufferWithMeta(key) {
+    if (!s3) throw new Error('R2 S3 is not configured for reading');
+
+    try {
+        const out = await s3.send(new GetObjectCommand({ Bucket: R2.bucket, Key: key }));
+        if (!out?.Body) return null;
+
+        const body = await streamToBuffer(out.Body);
+        return {
+            body,
+            contentType: out.ContentType ?? null,
+        };
+    } catch (e) {
+        if (String(e?.name || '').includes('NoSuchKey') || e?.$metadata?.httpStatusCode === 404) return null;
+        return null;
+    }
+}
+
+export async function readArchiveBuffer(kind, name, limits = {}) {
+    // Preserve the normal authentication/entitlement routes. Replace only the
+    // underlying read with the paused, hash-verified recovery archive source.
+    if (recoveryReader) return recoveryReader.read(kind, name, limits);
+    if (ARCHIVES_SOURCE === 'local') {
+        let filePath;
+
+        switch (kind) {
+            case 'daily':
+                filePath = path.join(DAILY_DIR, `${name}.br`);
+                break;
+
+            case 'matches':
+                filePath = path.join(MATCH_DETAILS_DIR, `${name}.br`);
+                break;
+
+            case 'player-details':
+                filePath = path.join(PLAYER_DETAILS_DIR, `${name}.br`);
+                break;
+
+            case 'players/matches':
+                filePath = path.join(PLAYER_MATCHES_DIR, `${name}.br`);
+                break;
+
+            case 'players/ts':
+                filePath = path.join(PLAYER_TS_DIR, `${name}.br`);
+                break;
+
+            case 'tournaments/matches':
+                filePath = path.join(TOURNAMENT_MATCHES_DIR, `${name}.br`);
+                break;
+
+            default:
+                throw new Error(`Unsupported archive kind: ${kind}`);
+        }
+
+        await fs.promises.access(filePath, fs.constants.R_OK);
+        if (limits.maxBytes && (await fs.promises.stat(filePath)).size > limits.maxBytes)
+            throw new Error('Archive exceeds read limit');
+        const buffer = await fs.promises.readFile(filePath, limits.signal ? { signal: limits.signal } : undefined);
+        if (limits.maxBytes && buffer.length > limits.maxBytes) throw new Error('Archive exceeds read limit');
+        return buffer;
+    }
+
+    let key;
+
+    switch (kind) {
+        case 'daily':
+            key = `daily/${name}.br`;
+            break;
+
+        case 'matches':
+            key = `matches/${name}.br`;
+            break;
+
+        case 'player-details':
+            key = `players/details/${name}.br`;
+            break;
+
+        case 'players/matches':
+            key = `players/matches/${name}.br`;
+            break;
+
+        case 'players/ts':
+            key = `players/ts/${name}.br`;
+            break;
+
+        case 'tournaments/matches':
+            key = `tournaments/matches/${name}.br`;
+            break;
+
+        default:
+            throw new Error(`Unsupported archive kind: ${kind}`);
+    }
+
+    return await fetchRemoteBrToBuffer(key, limits);
+}
+
+async function listDailyBrFiles() {
+    if (reviewedConfig && recoveryReader.availableDates) return recoveryReader.availableDates().map(day => `${day}.br`);
+    if (ARCHIVES_SOURCE === 'local') {
+        const files = await fs.promises.readdir(DAILY_DIR);
+        return files.filter((f) => /^\d{8}\.br$/i.test(f)).sort((a, b) => a.localeCompare(b));
+    }
+
+    if (!s3) throw new Error('R2 S3 is not configured for listing');
+
+    const Prefix = 'daily/';
+    const keys = [];
+    let ContinuationToken;
+
+    do {
+        const out = await s3.send(
+            new ListObjectsV2Command({
+                Bucket: R2.bucket,
+                Prefix,
+                ContinuationToken,
+            })
+        );
+
+        (out.Contents || []).forEach((obj) => {
+            if (obj.Key && /\.br$/i.test(obj.Key)) keys.push(obj.Key);
+        });
+
+        ContinuationToken = out.IsTruncated ? out.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+
+    return keys
+        .map((k) => k.substring(Prefix.length))
+        .filter((name) => /^\d{8}\.br$/i.test(name))
+        .sort((a, b) => a.localeCompare(b));
+}
+
+async function listIndexBrFiles(entity) {
+    if (reviewedConfig && recoveryReader.indexFile) return [await recoveryReader.indexFile(entity)];
+    if (ARCHIVES_SOURCE === 'local') {
+        const dir = entity === 'players' ? PLAYERS_INDEX_DIR : TOURNAMENTS_INDEX_DIR;
+        const files = await fs.promises.readdir(dir);
+        return files.filter((f) => /\.br$/i.test(f)).sort((a, b) => a.localeCompare(b));
+    }
+
+    if (!s3) throw new Error('R2 S3 is not configured for listing');
+
+    const Prefix = `${entity}/indexBuild/`;
+    const keys = [];
+    let ContinuationToken;
+
+    do {
+        const out = await s3.send(
+            new ListObjectsV2Command({
+                Bucket: R2.bucket,
+                Prefix,
+                ContinuationToken,
+            })
+        );
+
+        (out.Contents || []).forEach((obj) => {
+            if (obj.Key && /\.br$/i.test(obj.Key)) keys.push(obj.Key);
+        });
+
+        ContinuationToken = out.IsTruncated ? out.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+
+    return keys
+        .map((k) => k.substring(Prefix.length))
+        .filter((name) => name && /\.br$/i.test(name))
+        .sort((a, b) => a.localeCompare(b));
+}
+
+async function getLatestIndexFile(entity) {
+    const files = await listIndexBrFiles(entity);
+    return files.length ? files[files.length - 1] : null;
+}
+
+async function readIndexBuffer(entity, file) {
+    const safe = String(file || '').trim();
+    if (!safe || safe.includes('..') || safe.includes('/') || safe.includes('\\')) {
+        const err = new Error('Invalid index file name.');
+        err.statusCode = 400;
+        throw err;
+    }
+    if (!/\.br$/i.test(safe)) {
+        const err = new Error('Index file must end with .br');
+        err.statusCode = 400;
+        throw err;
+    }
+    if (reviewedConfig) return recoveryReader.readRelative(`${entity}/indexBuild/${safe}`);
+
+    if (ARCHIVES_SOURCE === 'local') {
+        const dir = entity === 'players' ? PLAYERS_INDEX_DIR : TOURNAMENTS_INDEX_DIR;
+        const filePath = path.join(dir, safe);
+        await fs.promises.access(filePath, fs.constants.R_OK);
+        return await fs.promises.readFile(filePath);
+    }
+
+    const key = `${entity}/indexBuild/${safe}`;
+    return await fetchRemoteBrToBuffer(key);
+}
+
+async function getDailyDateRange() {
+    const br = await listDailyBrFiles();
+    if (!br.length) return null;
+
+    const first = br[0].replace(/\.br$/i, '');
+    const last = br[br.length - 1].replace(/\.br$/i, '');
+    return { minDate: yyyymmddToIso(first), maxDate: yyyymmddToIso(last) };
+}
+
+function extractVersionFromIndexFile(file) {
+    const m = String(file || '').match(/\.(v\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z)\.br$/i);
+    return m ? m[1] : '';
+}
+
+async function headRemote(key) {
+    if (!s3) throw new Error('R2 S3 is not configured');
+    const out = await s3.send(new HeadObjectCommand({ Bucket: R2.bucket, Key: key }));
+    return {
+        key,
+        size: out.ContentLength ?? null,
+        lastModified: out.LastModified ? new Date(out.LastModified).toISOString() : null,
+        contentType: out.ContentType ?? null,
+        etag: out.ETag ?? null,
+    };
+}
+
+async function r2GetObjectBuffer(key) {
+    if (ARCHIVES_SOURCE !== 'remote') return null;
+    try {
+        return await fetchRemoteBrToBuffer(key);
+    } catch (e) {
+        const name = String(e?.name || '');
+        const status = e?.$metadata?.httpStatusCode;
+        if (name === 'NoSuchKey' || status === 404) return null;
+        throw e;
+    }
+}
+
+function parseAnalyticsArchiveName(manifestBuffer) {
+    const manifestText = manifestBuffer.toString('utf8').replace(/^\uFEFF/, '');
+    const manifest = JSON.parse(manifestText);
+    const fileName = String(manifest?.analytics?.url || '').trim();
+
+    if (
+        !fileName ||
+        fileName.includes('..') ||
+        fileName.includes('/') ||
+        fileName.includes('\\') ||
+        !/^analytics\.dashboard\.v\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z\.br$/i.test(fileName)
+    ) {
+        const err = new Error('Analytics manifest contains an invalid archive name.');
+        err.statusCode = 500;
+        throw err;
+    }
+
+    return fileName;
+}
+
+async function readAnalyticsDashboardBuffer() {
+    if (ARCHIVES_SOURCE === 'remote') {
+        const manifestBuffer = await fetchRemoteBrToBuffer(`analytics/${ANALYTICS_MANIFEST_FILE}`);
+        const fileName = parseAnalyticsArchiveName(manifestBuffer);
+        return await fetchRemoteBrToBuffer(`analytics/${fileName}`);
+    }
+
+    const manifestPath = path.join(ANALYTICS_DIR, ANALYTICS_MANIFEST_FILE);
+    const manifestBuffer = await fs.promises.readFile(manifestPath);
+    const fileName = parseAnalyticsArchiveName(manifestBuffer);
+    return await fs.promises.readFile(path.join(ANALYTICS_DIR, fileName));
+}
+
+async function readSimulationManifestBuffer() {
+    if (ARCHIVES_SOURCE === 'remote') {
+        return await fetchRemoteBrToBuffer(
+            `simulation/${SIMULATION_MANIFEST_FILE}`
+        );
+    }
+
+    return await fs.promises.readFile(
+        path.join(SIMULATION_DIR, SIMULATION_MANIFEST_FILE)
+    );
+}
+
+async function readSimulationReportBuffer() {
+    const manifestBuffer = await readSimulationManifestBuffer();
+    const fileName = parseSimulationArchiveName(manifestBuffer);
+
+    if (ARCHIVES_SOURCE === 'remote') {
+        return await fetchRemoteBrToBuffer(`simulation/${fileName}`);
+    }
+
+    return await fs.promises.readFile(path.join(SIMULATION_DIR, fileName));
+}
+
+/* ----------------------- Match details (guard) ---------------------- */
+
+async function serveMatchDetails(req, res) {
+    const id = String(req.params.id || '').trim();
+    if (!/^\d{5,12}$/.test(id)) {
+        return res.status(400).json({ message: 'Invalid id format.' });
+    }
+
+    const brBuf = await readArchiveBuffer('matches', id);
+
+// The backend may temporarily decompress match details only to evaluate access guards;
+// clients still receive the original Brotli buffer.
+    const rawBuf = brotliDecompressSync(brBuf);
+    const text = rawBuf.toString('utf8').replace(/^\uFEFF/, '');
+    const json = JSON.parse(text);
+
+    const expectedStartUtc = json?.m003;
+    const finishedValue = json?.m656;
+    const isFinished =
+        finishedValue === true ||
+        finishedValue === 1 ||
+        finishedValue === '1' ||
+        finishedValue === 'true';
+    const user = req.user || null;
+    const access = evaluateDetailsAccess({
+        isFinished,
+        isPrivileged: hasPrivilegedMatchDetailsAccess(user),
+        expectedStartUtc,
+        now: getNow(),
+        lockHours: DETAILS_LOCK_HOURS,
+    });
+    const cache = getDetailsCachePolicy(access);
+
+    if (!access.allowed) {
+        res.setHeader('Cache-Control', cache.cacheControl);
+        if (cache.varyAuthorization) res.vary('Authorization');
+        res.setHeader('X-BB-Guard', '1');
+        res.setHeader('X-BB-Route', 'match-details');
+        return res.status(423).json(buildDetailsLockedResponse(access));
+    }
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${id}.br"`);
+    res.setHeader('Cache-Control', cache.cacheControl);
+    if (cache.varyAuthorization) res.vary('Authorization');
+    res.setHeader('X-BB-Route', 'match-details');
+
+    return res.send(brBuf);
+}
+
+/* ------------------------------- Routes ---------------------------- */
+
+router.get('/_debug/config', (_req, res) => {
+    if (!isArchiveDebugEnabled()) {
+        return res.status(404).json({ message: 'Not found' });
+    }
+
+    res.json({
+        ARCHIVES_SOURCE,
+        DETAILS_LOCK_HOURS,
+        R2: {
+            bucket: R2.bucket,
+            endpoint: R2.endpoint,
+            hasAccessKey: !!R2.accessKeyId,
+            hasSecret: !!R2.secretAccessKey,
+            s3Enabled: !!s3,
+        },
+    });
+});
+
+router.get('/debug/now', (_req, res) => {
+    if (!isArchiveDebugEnabled()) {
+        return res.status(404).json({ message: 'Not found' });
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, ...getNowDebug() });
+});
+
+router.get('/_debug/r2-list', async (req, res, next) => {
+    try {
+        if (!isArchiveDebugEnabled()) {
+            return res.status(404).json({ message: 'Not found' });
+        }
+
+        if (ARCHIVES_SOURCE !== 'remote') {
+            return res.status(400).json({ error: 'ARCHIVES_SOURCE is not remote', ARCHIVES_SOURCE });
+        }
+        if (!s3) return res.status(500).json({ error: 's3 client is null' });
+
+        const prefix = String(req.query.prefix ?? 'daily/').toString();
+        const max = Math.min(parseInt(req.query.max ?? '20', 10), 200);
+
+        const out = await s3.send(
+            new ListObjectsV2Command({
+                Bucket: R2.bucket,
+                Prefix: prefix,
+                MaxKeys: max,
+            })
+        );
+
+        const keys = (out.Contents ?? []).map((o) => o.Key);
+
+        res.json({
+            bucket: R2.bucket,
+            prefix,
+            keyCount: keys.length,
+            sample: keys.slice(0, 50),
+            isTruncated: !!out.IsTruncated,
+        });
+    } catch (e) {
+        next(e);
+    }
+});
+
+router.get('/_debug/status', async (_req, res, next) => {
+    try {
+        if (!isArchiveDebugEnabled()) {
+            return res.status(404).json({ message: 'Not found' });
+        }
+
+        const range = await getDailyDateRange();
+        const latestDaily = await (async () => {
+            const br = await listDailyBrFiles();
+            if (!br.length) return null;
+            br.sort((a, b) => b.localeCompare(a));
+            return br[0].replace(/\.br$/i, '');
+        })();
+
+        const latestPlayersIndex = await getLatestIndexFile('players');
+        const latestTournamentsIndex = await getLatestIndexFile('tournaments');
+
+        const payload = {
+            ok: true,
+            source: ARCHIVES_SOURCE,
+            bucket: ARCHIVES_SOURCE === 'remote' ? R2.bucket : null,
+            endpoint: ARCHIVES_SOURCE === 'remote' ? R2.endpoint : null,
+
+            daily: {
+                range: range ?? null,
+                latest: latestDaily ? { yyyymmdd: latestDaily, iso: yyyymmddToIso(latestDaily) } : null,
+            },
+
+            indexes: {
+                players: latestPlayersIndex ? { latest: latestPlayersIndex } : null,
+                tournaments: latestTournamentsIndex ? { latest: latestTournamentsIndex } : null,
+            },
+
+            checks: null,
+            nowUtc: new Date().toISOString(),
+        };
+
+        if (ARCHIVES_SOURCE === 'remote') {
+            const checks = [];
+            if (latestDaily) checks.push(headRemote(`daily/${latestDaily}.br`));
+            if (latestPlayersIndex) checks.push(headRemote(`players/indexBuild/${latestPlayersIndex}`));
+            if (latestTournamentsIndex) checks.push(headRemote(`tournaments/indexBuild/${latestTournamentsIndex}`));
+
+            payload.checks = await Promise.allSettled(checks).then((results) =>
+                results.map((r) => (r.status === 'fulfilled' ? { ok: true, ...r.value } : { ok: false, error: String(r.reason) }))
+            );
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json(payload);
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/archives/latest-daily
+router.get('/latest-daily', async (_req, res) => {
+    try {
+        const br = await listDailyBrFiles();
+        if (!br.length) return res.status(404).json({ message: 'No .br files found.' });
+
+        br.sort((a, b) => b.localeCompare(a));
+        const latest = br[0];
+        const date = latest.replace(/\.br$/i, '');
+        const iso = yyyymmddToIso(date);
+
+        res.json({
+            date,
+            iso,
+            filename: latest,
+            source: ARCHIVES_SOURCE,
+            baseUrl: ARCHIVES_SOURCE === 'remote' ? ARCHIVES_BASE_URL : undefined,
+        });
+    } catch (e) {
+        console.error('❌ /archives/latest-daily error:', e);
+        res.status(500).json({ message: 'Failed to list archives.' });
+    }
+});
+
+// GET /api/archives/daterange  -> { minDate, maxDate }
+router.get('/daterange', async (_req, res) => {
+    try {
+        const range = await getDailyDateRange();
+        if (!range) return res.status(404).json({ message: 'No .br files found.' });
+        res.json(range);
+    } catch (e) {
+        console.error('❌ /archives/daterange error:', e);
+        res.status(500).json({ message: 'Failed to list archives.' });
+    }
+});
+
+// GET /api/archives/available-dates  -> ["YYYY-MM-DD", ...] asc
+router.get('/available-dates', async (_req, res) => {
+    try {
+        const br = await listDailyBrFiles();
+        const dates = br.map((f) => yyyymmddToIso(f.replace(/\.br$/i, '')));
+        res.json(dates);
+    } catch (e) {
+        console.error('❌ /archives/available-dates error:', e);
+        res.status(500).json({ message: 'Failed to list archives.' });
+    }
+});
+
+// Angular legacy: /daily/index.json
+router.get('/daily/index.json', async (_req, res) => {
+    try {
+        const range = await getDailyDateRange();
+        if (!range) return res.status(404).json({ message: 'No .br files found.' });
+
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.json(range);
+    } catch (e) {
+        console.error('❌ /archives/daily/index.json error:', e);
+        res.status(500).json({ message: 'Failed to read daterange.' });
+    }
+});
+
+// GET /api/archives/daily/:date  (date = "YYYYMMDD")
+router.get('/daily/:date', async (req, res) => {
+    const date = String(req.params.date || '').trim().replace(/\.br$/i, '');
+    if (!/^\d{8}$/.test(date)) return res.status(400).json({ message: 'Invalid date format.' });
+
+    try {
+        const brBuf = await readArchiveBuffer('daily', date);
+        const jsonBuf = brotliDecompressSync(brBuf);
+        const text = jsonBuf.toString('utf8');
+
+        const rows = JSON.parse(text);
+        if (!Array.isArray(rows)) {
+            return res.status(500).json({ message: 'Archive content is not an array.' });
+        }
+
+        const matches = rows.map(projectPublicDailyMatch);
+
+        res.setHeader(
+            'Cache-Control',
+            ARCHIVES_SOURCE === 'local' ? 'no-store' : 'public, max-age=300',
+        );
+        res.json({ date, count: matches.length, matches });
+    } catch (e) {
+        console.error('❌ /archives/daily error:', e);
+        res.status(500).json({ message: 'Failed to read/decompress archive.' });
+    }
+});
+
+// ✅ legacy: /api/archives/matches/:id (guarded)
+router.get('/matches/:id', optionalAuth, async (req, res) => {
+    try {
+        return await serveMatchDetails(req, res);
+    } catch (e) {
+        if (recoveryReader && e.code === 'ENOENT') return res.status(404).json({ message: 'This archive is not yet available in the paused recovery preview.' });
+        console.error('❌ /archives/matches error:', e);
+        return res.status(500).json({ message: 'Failed to read/decompress archive.' });
+    }
+});
+
+// GET /api/archives/match-details/:id
+router.get('/match-details/:id', optionalAuth, async (req, res) => {
+    try {
+        return await serveMatchDetails(req, res);
+    } catch (e) {
+        if (recoveryReader && e.code === 'ENOENT') return res.status(404).json({ message: 'This archive is not yet available in the paused recovery preview.' });
+        console.error('❌ /archives/match-details error:', e);
+        return res.status(500).json({ message: 'Failed to read archive.' });
+    }
+});
+
+/* --------------------- TrueSkill (players/ts) ---------------------- */
+
+router.get('/ts/:playerTPId', async (req, res) => {
+    try {
+        const id = String(req.params.playerTPId || '').trim();
+        const fileName = `${id}.br`;
+
+        let brBuffer = null;
+
+        if ((process.env.ARCHIVES_SOURCE || '').toLowerCase() === 'local') {
+            const baseDir = PLAYER_TS_DIR;
+            const fullPath = path.join(baseDir, fileName);
+
+            if (!fs.existsSync(fullPath)) {
+                return res.status(404).json({ ok: false, reason: 'missing-local-file' });
+            }
+
+            brBuffer = fs.readFileSync(fullPath);
+        } else {
+            const key = `players/ts/${fileName}`;
+            brBuffer = await r2GetObjectBuffer(key);
+
+            if (!brBuffer) {
+                return res.status(404).json({ ok: false, reason: 'missing-r2-object' });
+            }
+        }
+
+        const jsonBuffer = zlib.brotliDecompressSync(brBuffer);
+        const data = JSON.parse(jsonBuffer.toString('utf-8'));
+
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.json({ ok: true, playerTPId: Number(id), data });
+    } catch (e) {
+        console.error('[ts] error:', e);
+        res.status(500).json({ ok: false });
+    }
+});
+
+router.get('/players/ts/:playerTPId', optionalAuth, async (req, res) => {
+    try {
+        return await servePlayerTsArchive(req, res);
+    } catch (e) {
+        console.error('❌ /players/ts error:', e);
+        return res.status(500).json({
+            message: 'Failed to read player TS archive.',
+            error: e?.message ?? String(e)
+        });
+    }
+});
+
+async function servePlayerTsArchive(req, res) {
+    const playerTPId = String(req.params.playerTPId || '').trim();
+
+    if (!/^\d{1,12}$/.test(playerTPId)) {
+        return res.status(400).json({ message: 'Invalid playerTPId format.' });
+    }
+
+    try {
+        const brBuf = await readArchiveBuffer('players/ts', playerTPId);
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('X-BB-Route', 'player-ts');
+
+        return res.send(brBuf);
+    } catch (err) {
+        console.error('[player-ts] readArchiveBuffer FAILED', err);
+
+        // Keep this compatibility fallback for legacy local TS archive layouts.
+        const fullPath = path.join(
+            'd:/Development/My Projects/BonzoByteRoot/StaticFiles/Data/archives',
+            'players',
+            'ts',
+            `${playerTPId}.br`
+        );
+
+        const stat = await fs.stat(fullPath);
+
+        const brBuf = await fs.readFile(fullPath);
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('X-BB-Route', 'player-ts-direct');
+
+        return res.send(brBuf);
+    }
+}
+
+/* ------------------ Players/Tournaments index manifests ------------- */
+
+// GET /api/archives/players/manifest
+router.get('/players/manifest', async (_req, res, next) => {
+    try {
+        const range = await getDailyDateRange();
+        const latest = await getLatestIndexFile('players');
+
+        if (!range) return res.status(404).json({ message: 'No daily archives found.' });
+        if (!latest) return res.status(404).json({ message: 'No players index files found.' });
+
+        const version = extractVersionFromIndexFile(latest);
+
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.json({
+            minDate: range.minDate,
+            maxDate: range.maxDate,
+            generatedAtUtc: new Date().toISOString(),
+            players: {
+                version: version || latest,
+                url: latest, // filename
+                contentType: 'application/octet-stream',
+            },
+        });
+    } catch (e) {
+        next(e);
+    }
+});
+
+router.get('/players/index/:file', async (req, res, next) => {
+    try {
+        const file = String(req.params.file || '').trim();
+        const brBuf = await readIndexBuffer('players', file);
+
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('Content-Type', 'application/octet-stream');
+        return res.send(brBuf);
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/archives/players/details/:playerTPId
+router.get('/players/details/:playerTPId', async (req, res, next) => {
+    try {
+        const { playerTPId } = req.params;
+
+        if (!playerTPId || !/^\d+$/.test(playerTPId)) {
+            return res.status(400).json({ message: 'Invalid player TPId.' });
+        }
+
+        const buffer = await readArchiveBuffer('player-details', playerTPId);
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+
+        return res.send(buffer);
+    } catch (e) {
+        if (e?.code === 'ENOENT') {
+            return res.status(404).json({
+                message: 'Player details archive not found.',
+                path: req.originalUrl
+            });
+        }
+
+        next(e);
+    }
+});
+
+router.get('/players/matches/:playerTPId', optionalAuth, async (req, res) => {
+    try {
+        return await servePlayerMatchesArchive(req, res);
+    } catch (e) {
+        console.error('❌ /archives/players/matches error:', e);
+        return res.status(500).json({ message: 'Failed to read player matches archive.' });
+    }
+});
+
+async function servePlayerMatchesArchive(req, res) {
+    const playerTPId = String(req.params.playerTPId || '').trim();
+
+    if (!/^\d{1,12}$/.test(playerTPId)) {
+        return res.status(400).json({ message: 'Invalid playerTPId format.' });
+    }
+
+    const brBuf = await readArchiveBuffer('players/matches', playerTPId);
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${playerTPId}.br"`);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('X-BB-Route', 'player-matches');
+
+    return res.send(brBuf);
+}
+
+// GET /api/archives/tournaments/manifest
+router.get('/tournaments/manifest', async (_req, res, next) => {
+    try {
+        const range = await getDailyDateRange();
+        const latest = await getLatestIndexFile('tournaments');
+
+        if (!range) return res.status(404).json({ message: 'No daily archives found.' });
+        if (!latest) return res.status(404).json({ message: 'No tournaments index files found.' });
+
+        const version = extractVersionFromIndexFile(latest);
+
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.json({
+            minDate: range.minDate,
+            maxDate: range.maxDate,
+            generatedAtUtc: new Date().toISOString(),
+            tournaments: {
+                version: version || latest,
+                url: latest,
+                contentType: 'application/octet-stream',
+            },
+            tournamentStrength: reviewedConfig ? recoveryReader.tournamentStrength : null,
+        });
+    } catch (e) {
+        next(e);
+    }
+});
+
+router.get('/tournaments/index/:file', async (req, res, next) => {
+    try {
+        const file = String(req.params.file || '').trim();
+        const brBuf = await readIndexBuffer('tournaments', file);
+
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.setHeader('Content-Type', 'application/octet-stream');
+        return res.send(brBuf);
+    } catch (e) {
+        next(e);
+    }
+});
+
+router.get('/tournaments/matches/:tournamentEventTPId', optionalAuth, async (req, res) => {
+    try {
+        return await serveTournamentMatchesArchive(req, res);
+    } catch (e) {
+        console.error('❌ /archives/tournaments/matches error:', e);
+        return res.status(500).json({ message: 'Failed to read tournament matches archive.' });
+    }
+});
+
+async function serveTournamentMatchesArchive(req, res) {
+    const tournamentEventTPId = String(req.params.tournamentEventTPId || '').trim();
+
+    if (!/^\d{1,12}$/.test(tournamentEventTPId)) {
+        return res.status(400).json({ message: 'Invalid tournamentEventTPId format.' });
+    }
+
+    const brBuf = await readArchiveBuffer('tournaments/matches', tournamentEventTPId);
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${tournamentEventTPId}.br"`);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('X-BB-Route', 'player-matches');
+
+    return res.send(brBuf);
+}
+
+/* ----------------------------- Status ------------------------------ */
+
+router.get('/status', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+        ok: true,
+        source: ARCHIVES_SOURCE,
+        nowUtc: new Date().toISOString(),
+    });
+});
+
+/* --------------------------- Players photo -------------------------- */
+
+router.get('/players/photo/:id', async (req, res) => {
+    try {
+        const id = String(req.params.id || '').trim();
+
+        // "photoM.jpg" / "photoW.jpg"
+        if (id === 'photoM.jpg' || id === 'photoW.jpg') {
+            const key = `players/photo/${id}`;
+            const found = await r2GetObjectBufferWithMeta(key);
+            if (!found) return res.status(404).end();
+
+            res.setHeader('Content-Type', found.contentType ?? 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+            return res.send(found.body);
+        }
+
+        // Standard player JPEG name without an extension.
+        const key = `players/photo/${id}.jpg`;
+        const found = await r2GetObjectBufferWithMeta(key);
+
+        if (!found) {
+            const g = String(req.query.g || 'M').toUpperCase() === 'W' ? 'W' : 'M';
+            return res.redirect(302, `/api/archives/players/photo/photo${g}.jpg`);
+        }
+
+        res.setHeader('Content-Type', found.contentType ?? 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+        return res.send(found.body);
+    } catch (e) {
+        console.error('players/photo failed', e);
+        return res.status(500).json({ ok: false });
+    }
+});
+
+router.get('/analytics/dashboard', async (req, res, next) => {
+    try {
+        const buf = await readAnalyticsDashboardBuffer();
+
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.send(buf);
+    } catch (err) {
+        if (
+            err?.code === 'ENOENT' ||
+            String(err?.name || '').includes('NoSuchKey') ||
+            err?.$metadata?.httpStatusCode === 404
+        ) {
+            return res.status(404).json({ message: 'Analytics archive not found.' });
+        }
+
+        next(err);
+    }
+});
+
+router.get('/simulation/manifest', async (_req, res, next) => {
+    try {
+        const buf = await readSimulationManifestBuffer();
+
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.send(buf);
+    } catch (err) {
+        if (
+            err?.code === 'ENOENT' ||
+            String(err?.name || '').includes('NoSuchKey') ||
+            err?.$metadata?.httpStatusCode === 404
+        ) {
+            return res.status(404).json({ message: 'Simulation manifest not found.' });
+        }
+
+        next(err);
+    }
+});
+
+router.get('/simulation/report', async (_req, res, next) => {
+    try {
+        const buf = await readSimulationReportBuffer();
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Encoding', 'br');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.send(buf);
+    } catch (err) {
+        if (
+            err?.code === 'ENOENT' ||
+            String(err?.name || '').includes('NoSuchKey') ||
+            err?.$metadata?.httpStatusCode === 404
+        ) {
+            return res.status(404).json({ message: 'Simulation archive not found.' });
+        }
+
+        next(err);
+    }
+});
+
+export default router;

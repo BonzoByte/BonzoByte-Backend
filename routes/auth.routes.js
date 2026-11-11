@@ -1,0 +1,132 @@
+import express from 'express';
+import passport from 'passport';
+import rateLimit from 'express-rate-limit';
+
+import User from '../models/user.model.js';
+import protect from '../middleware/auth.middleware.js';
+import generateToken from '../utils/generateToken.js';
+import {
+    registerUser,
+    loginUser,
+    logoutUser,
+    forgotPassword,
+    resetPassword,
+    contactUs,
+    requestResetPassword,
+    updateUserProfile,
+    devVerifyUser,
+} from '../controllers/auth.controller.js';
+import { getEntitlements } from '../utils/entitlements.js';
+import { competitionPrivacyDto } from '../utils/competitionPrivacy.js';
+import { env } from '../config/env.js';
+import { createOAuthFlow } from '../utils/oauthFlow.js';
+import { verificationIdentity, verificationStatus, resendVerification, verifyEmailCode, verifyEmailLink } from '../controllers/verification.controller.js';
+
+const router = express.Router();
+
+// Prefer env.FRONTEND_URL and fall back to localhost.
+const FRONTEND = env.FRONTEND_URL || 'http://localhost:4200';
+const isAuthDevToolEnabled = () =>
+    String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
+    String(process.env.DEV_BYPASS_VERIFY || '') === '1';
+
+// --- helper: sanitize user payload for client ---
+const sanitizeUser = (u) =>
+    u && ({
+        _id: u._id,
+        name: u.name,
+        email: u.email,
+        nickname: u.nickname,
+        avatarUrl: u.avatarUrl,
+        isAdmin: u.isAdmin,
+        isUser: u.isUser,
+        isVerified: u.isVerified,
+        provider: u.provider,
+        entitlements: getEntitlements(u),
+        competitionPrivacy: competitionPrivacyDto(u),
+    });
+
+const contactLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const verificationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5,
+    standardHeaders: true, legacyHeaders: false, message: { code: 'VERIFICATION_RATE_LIMIT' } });
+const verificationAttemptLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 40,
+    standardHeaders: true, legacyHeaders: false, message: { code: 'VERIFICATION_RATE_LIMIT' } });
+const registrationLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
+    standardHeaders: true, legacyHeaders: false });
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30,
+    standardHeaders: true, legacyHeaders: false });
+
+// --- core auth ---
+router.post('/register', registrationLimiter, registerUser);
+router.post('/login', loginLimiter, loginUser);
+router.post('/logout', protect, logoutUser);
+
+router.post('/verify-email', verificationAttemptLimiter, verifyEmailLink);
+router.post('/verification-status', verificationIdentity, verificationStatus);
+router.post('/verify-email-code', verificationAttemptLimiter, verificationIdentity, verifyEmailCode);
+router.post('/forgotPassword', forgotPassword);
+router.post('/reset-password', resetPassword);
+router.post('/request-reset-password', requestResetPassword);
+router.post('/resend-verification', verificationLimiter, verificationIdentity, resendVerification);
+router.post('/dev/verify', devVerifyUser);
+router.post('/contact', contactLimiter, contactUs);
+
+// /me returns the current user identified by the Authorization JWT.
+router.get('/me', protect, (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    return res.json(sanitizeUser(req.user));
+});
+
+router.post('/update', protect, updateUserProfile);
+
+// --- OAuth: Google ---
+const googleFlow = createOAuthFlow({ passport, provider: 'google', frontendUrl: FRONTEND,
+    callbackUrl: env.GOOGLE_CALLBACK_URL || new URL('/api/auth/google/callback', env.BASE_URL).href,
+    secret: () => env.JWT_SECRET, issueToken: generateToken });
+router.get('/google', googleFlow.start);
+router.get('/google/callback', googleFlow.callback);
+
+// --- OAuth: Facebook ---
+router.get('/facebook', (req, res, next) => {
+    const state = typeof req.query.state === 'string' ? req.query.state : undefined;
+    return passport.authenticate('facebook', { scope: ['email', 'public_profile'], session: false, state })(req, res, next);
+});
+router.get('/facebook/callback', passport.authenticate('facebook', {
+    session: false, failureRedirect: `${FRONTEND}/auth/callback?error=oauth_failed`,
+}), issueJwtHandler);
+
+// --- nickname check ---
+router.get('/nickname-exists/:nickname', async (req, res) => {
+    try {
+        const nickname = String(req.params.nickname || '').trim();
+        if (!nickname) return res.json(false);
+
+        const existing = await User.findOne({
+            nickname: { $regex: `^${escapeRegex(nickname)}$`, $options: 'i' },
+        }).select('_id');
+
+        res.json(Boolean(existing));
+    } catch {
+        res.json(false);
+    }
+});
+
+router.get('/debug/routes', (_req, res) => {
+    if (!isAuthDevToolEnabled()) {
+        return res.status(404).json({ message: 'Not found' });
+    }
+
+    res.json({ ok: true, hasDevVerify: true });
+});
+
+function issueJwtHandler(req, res) {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    const token = generateToken(req.user._id, req.user.tokenVersion);
+    return res.redirect(`${FRONTEND}/oauth-success#token=${encodeURIComponent(token)}`);
+}
+
+function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export default router;

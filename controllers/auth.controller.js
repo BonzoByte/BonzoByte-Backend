@@ -1,0 +1,531 @@
+import User from '../models/user.model.js';
+import { DeletionJob } from '../models/accountDeletion.model.js';
+import { registrationBlockingDeletion } from '../utils/accountDeletionRegistration.js';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import { generateToken } from '../utils/generateToken.js';
+import { generateVerificationSession } from '../utils/verificationSession.js';
+import { emailVerification } from './verification.controller.js';
+import sendResetPasswordEmail from '../utils/sendResetPasswordEmail.js';
+import asyncHandler from 'express-async-handler';
+import transporter from '../utils/mailer.js';
+import { getEntitlements } from '../utils/entitlements.js';
+import { competitionPrivacyDto } from '../utils/competitionPrivacy.js';
+import { presencePrivacyDto } from '../utils/presencePrivacy.js';
+import { createInitialTrial } from '../utils/trial.js';
+import { assertBillingLabEnvironment } from '../utils/billingLabSafety.js';
+import { createPasswordResetConsumer } from '../utils/passwordReset.js';
+import { developmentTestAccountAllowed } from '../utils/developmentTestAccounts.js';
+
+const consumePasswordReset = createPasswordResetConsumer({ User });
+
+const handleError = (res, statusCode, message) => {
+  return res.status(statusCode).json({ message });
+};
+
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+const isExplicitDevVerifyEnabled = () =>
+  String(process.env.NODE_ENV || '').toLowerCase() !== 'production' &&
+  String(process.env.DEV_BYPASS_VERIFY || '') === '1';
+
+const RESET_PASSWORD_TOKEN_BYTES = 32;
+const RESET_PASSWORD_TOKEN_TTL_MS = 60 * 60 * 1000;
+const RESET_PASSWORD_INVALID_MESSAGE = 'Invalid or expired reset token.';
+const RESET_PASSWORD_REQUEST_MESSAGE = 'If an account with that email exists, a password reset link has been sent.';
+
+const hashResetPasswordToken = (token) =>
+  crypto.createHash('sha256').update(String(token)).digest('hex');
+
+const isValidResetToken = (value) => /^[a-f0-9]{64}$/i.test(String(value || ''));
+
+const safeMailError = (err) => ({
+  code: err?.code || 'MAIL_SEND_FAILED',
+  message: err?.message || 'Unknown mail delivery error.',
+});
+
+const sendResetPasswordRequestResponse = (res) =>
+  res.status(200).json({ message: RESET_PASSWORD_REQUEST_MESSAGE });
+
+// Registration keeps email delivery best-effort so account creation is not blocked by mail outages.
+export const registerUser = async (req, res) => {
+  try {
+    const { email, password, nickname, name, country } = req.body;
+
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedNickname = nickname ? String(nickname).trim() : '';
+    const normalizedName = name ? String(name).trim() : '';
+
+    if (!normalizedEmail || !password) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Email and password are required.',
+      });
+    }
+
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid email format.',
+      });
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Password must be at least 8 characters long.',
+      });
+    }
+
+    if (normalizedNickname && (normalizedNickname.length < 3 || normalizedNickname.length > 30)) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Nickname must be between 3 and 30 characters long.',
+      });
+    }
+
+    if (await DeletionJob.exists(registrationBlockingDeletion({ email: normalizedEmail })))
+      return res.status(409).json({ code: 'ACCOUNT_ERASURE_PENDING', message: 'Account erasure is still being processed. Contact info@bonzobyte.com.' });
+    const existingByEmail = await User.findOne({ email: normalizedEmail });
+    if (existingByEmail) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'EMAIL_ALREADY_EXISTS',
+        message: 'Email is already registered.',
+      });
+    }
+
+    if (normalizedNickname) {
+      const existingByNickname = await User.findOne({ nickname: normalizedNickname });
+      if (existingByNickname) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'NICKNAME_ALREADY_EXISTS',
+          message: 'Nickname is already taken.',
+        });
+      }
+    }
+
+    const emailDisabled = ['1', 'true'].includes(String(process.env.EMAIL_DISABLED || '').toLowerCase());
+
+    const user = await User.create({
+      email: normalizedEmail,
+      password,
+      nickname: normalizedNickname || undefined,
+      name: normalizedName || normalizedNickname || normalizedEmail.split('@')[0],
+      country,
+      provider: ['local'],
+      createdVia: 'manual',
+
+      // EMAIL_DISABLED allows local registration flows to proceed without outbound mail.
+      isVerified: emailDisabled ? true : false,
+      isUser: emailDisabled ? true : false,
+
+      // Lab registrations are separate Standard test users; no mail or normal-account migration.
+      trial: assertBillingLabEnvironment() ? {} : createInitialTrial(),
+      ads: { enabled: true, disabledReason: 'trial' },
+    });
+
+    if (!emailDisabled) {
+      try {
+        await emailVerification.send(user._id);
+      } catch (err) {
+        console.error('[REGISTER] Verification email unavailable:', err?.code || 'VERIFICATION_UNAVAILABLE');
+        // Keep registration successful even if verification email delivery fails.
+      }
+    }
+
+    const token = generateToken(user._id.toString(), user.tokenVersion);
+
+    return res.status(201).json({
+      status: 'ok',
+      message: emailDisabled
+        ? 'Registration successful. You are now logged in.'
+        : 'Registration successful. Please check your email to verify your account.',
+      token,
+      user: {
+        _id: user._id.toString(),
+        email: user.email,
+        name: user.name,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl ?? null,
+        isAdmin: !!user.isAdmin,
+        isUser: !!user.isUser,
+        isVerified: !!user.isVerified,
+        provider: Array.isArray(user.provider) ? user.provider : [],
+        entitlements: getEntitlements(user),
+        competitionPrivacy: competitionPrivacyDto(user),
+        presencePrivacy: presencePrivacyDto(user),
+      }
+    });
+  } catch (error) {
+    if (error?.code === 11000) {
+      const key = Object.keys(error.keyPattern || {})[0];
+      return res.status(400).json({
+        status: 'error',
+        code: key === 'nickname' ? 'NICKNAME_ALREADY_EXISTS' : 'EMAIL_ALREADY_EXISTS',
+        message: key === 'nickname' ? 'Nickname is already taken.' : 'Email is already registered.',
+      });
+    }
+
+    console.error('Greška u registerUser:', error);
+    return res.status(500).json({
+      status: 'error',
+      code: 'SERVER_ERROR',
+      message: 'Server error during registration.',
+    });
+  }
+};
+
+export const loginUser = async (req, res) => {
+  try {
+    const { identifier, password } = req.body;
+
+    const idf = String(identifier || '').trim().toLowerCase();
+    const pwd = String(password || '');
+
+    if (!idf || !pwd) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Identifier and password are required.',
+      });
+    }
+
+    // Password is select:false in the schema, so login must opt in explicitly.
+    const user = await User.findOne({
+      $or: [{ email: idf }, { nickname: idf }],
+    }).select('+password');
+
+    if (!user || !user.password || user.accountClosure?.requestedAt || !developmentTestAccountAllowed(user)) {
+      return res.status(401).json({
+        status: 'error',
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid email/username or password.',
+      });
+    }
+
+    const isMatch = await bcrypt.compare(pwd, user.password);
+    if (!isMatch) {
+      return res.status(401).json({
+        status: 'error',
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid email/username or password.',
+      });
+    }
+
+    if (!user.isVerified) {
+      return res.status(403).json({
+        status: 'error',
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email before logging in.',
+        email: user.email,
+        verificationTicket: generateVerificationSession(user),
+      });
+    }
+
+    const token = generateToken(user._id.toString(), user.tokenVersion);
+
+    return res.status(200).json({
+      status: 'ok',
+      token,
+      user: {
+        _id: user._id.toString(),
+        email: user.email,
+        name: user.name,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl ?? null,
+        isAdmin: !!user.isAdmin,
+        isUser: !!user.isUser,
+        isVerified: !!user.isVerified,
+        provider: Array.isArray(user.provider) ? user.provider : [],
+        entitlements: getEntitlements(user),
+        competitionPrivacy: competitionPrivacyDto(user),
+        presencePrivacy: presencePrivacyDto(user),
+      },
+    });
+  } catch (error) {
+    console.error('[LOGIN ERROR]:', error);
+    return res.status(500).json({
+      status: 'error',
+      code: 'SERVER_ERROR',
+      message: 'Server error during login.',
+    });
+  }
+};
+
+export const logoutUser = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'Korisnik nije pronađen.' });
+    }
+
+    user.isOnline = false;
+    await user.save();
+
+    return res.status(200).json({ message: 'Odjava uspješna.' });
+  } catch (error) {
+    console.error('[LOGOUT ERROR]:', error);
+    res.status(500).json({ message: 'Greška prilikom odjave.' });
+  }
+};
+
+async function requestPasswordReset(req, res) {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+
+  try {
+    if (email && isValidEmail(email)) {
+      const user = await User.findOne({ email });
+      if (user && !user.accountClosure?.requestedAt) {
+        const token = crypto.randomBytes(RESET_PASSWORD_TOKEN_BYTES).toString('hex');
+        const tokenHash = hashResetPasswordToken(token);
+
+        await User.updateOne(
+          { _id: user._id, 'accountClosure.requestedAt': { $exists: false } },
+          {
+            $set: {
+              resetPasswordToken: tokenHash,
+              resetPasswordExpires: new Date(Date.now() + RESET_PASSWORD_TOKEN_TTL_MS),
+            },
+          },
+          { runValidators: false }
+        );
+
+        try {
+          await sendResetPasswordEmail(user.email, token);
+        } catch (mailErr) {
+          console.warn('[RESET REQUEST EMAIL ERROR]:', safeMailError(mailErr));
+        }
+      }
+    }
+
+    // Always return the same response so reset requests do not reveal account existence.
+    return sendResetPasswordRequestResponse(res);
+  } catch (err) {
+    console.error('[RESET REQUEST ERROR]:', err);
+    return res.status(500).json({ message: 'Failed to process password reset request.' });
+  }
+}
+
+export async function forgotPassword(req, res) {
+  return requestPasswordReset(req, res);
+}
+
+export async function resetPassword(req, res) {
+  const token = String(req.body?.token || '').trim();
+  const password = req.body?.password;
+
+  if (!isValidResetToken(token)) {
+    return res.status(400).json({ message: RESET_PASSWORD_INVALID_MESSAGE });
+  }
+
+  if (typeof password !== 'string' || !password) {
+    return res.status(400).json({ message: 'Token and new password are required.' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
+  }
+
+  try {
+    const tokenHash = hashResetPasswordToken(token);
+    if (!await consumePasswordReset(tokenHash, password)) {
+      return res.status(400).json({ message: RESET_PASSWORD_INVALID_MESSAGE });
+    }
+
+    return res.json({ message: 'Password changed successfully.' });
+  } catch (error) {
+    console.error('[RESET PASSWORD ERROR]:', error);
+    return res.status(500).json({ message: 'Došlo je do greške prilikom resetiranja lozinke.' });
+  }
+}
+
+export const getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).populate('country', 'countryShort countryFull');
+    if (!user) return res.status(404).json({ message: 'Korisnik nije pronađen.' });
+
+    return res.status(200).json({
+      user: {
+        _id: user._id.toString(),
+        email: user.email,
+        name: user.name,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl ?? null,
+        isAdmin: !!user.isAdmin,
+        isUser: !!user.isUser,
+        isVerified: !!user.isVerified,
+        provider: Array.isArray(user.provider) ? user.provider : [],
+        entitlements: getEntitlements(user),
+        competitionPrivacy: competitionPrivacyDto(user),
+        presencePrivacy: presencePrivacyDto(user),
+      },
+    });
+  } catch (err) {
+    console.error('Greška kod dohvaćanja korisnika:', err);
+    res.status(500).json({ message: 'Greška na serveru.' });
+  }
+};
+
+export const requestResetPassword = requestPasswordReset;
+
+export const getMe = (req, res) => {
+  const u = req.user;
+  if (!u) return res.status(401).json({ message: 'Unauthorized' });
+
+  res.json({
+    _id: u._id,
+    name: u.name,
+    email: u.email,
+    nickname: u.nickname,
+    avatarUrl: u.avatarUrl,
+    isAdmin: u.isAdmin,
+    isUser: u.isUser,
+    isVerified: u.isVerified,
+    provider: u.provider,
+    entitlements: getEntitlements(u),
+    competitionPrivacy: competitionPrivacyDto(u),
+    presencePrivacy: presencePrivacyDto(u),
+  });
+};
+
+// Development-only endpoint for local verification testing without email delivery.
+export const devVerifyUser = async (req, res) => {
+  try {
+    if (!isExplicitDevVerifyEnabled()) {
+      return res.status(404).json({ message: 'Not found' });
+    }
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        message: 'Email is required.',
+      });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        code: 'USER_NOT_FOUND',
+        message: 'User not found.',
+      });
+    }
+
+    user.isVerified = true;
+    user.isUser = true;
+    user.trial = user.trial || { endsAt: null, grantedDaysTotal: 0, lastGrantedAt: null };
+
+    await user.save();
+
+    return res.status(200).json({
+      status: 'ok',
+      message: 'User verified (DEV).',
+      user: {
+        _id: user._id.toString(),
+        email: user.email,
+        nickname: user.nickname,
+        name: user.name,
+        isVerified: !!user.isVerified,
+        isUser: !!user.isUser,
+        isAdmin: !!user.isAdmin,
+        entitlements: getEntitlements(user),
+        competitionPrivacy: competitionPrivacyDto(user),
+        presencePrivacy: presencePrivacyDto(user),
+      },
+    });
+  } catch (e) {
+    console.error('[DEV VERIFY ERROR]:', e);
+    return res.status(500).json({
+      status: 'error',
+      code: 'SERVER_ERROR',
+      message: 'Server error.',
+    });
+  }
+};
+
+export const contactUs = asyncHandler(async (req, res) => {
+  const { name, email, message } = req.body || {};
+  if (!name || !email || !message) {
+    return res.status(400).json({ message: 'Name, email and message are required.' });
+  }
+
+  const TO = process.env.SUPPORT_EMAIL || process.env.CONTACT_TO || process.env.EMAIL_USER || 'bonzobyte@gmail.com';
+
+  if (!TO) {
+    console.error('[CONTACT] No recipient configured (SUPPORT_EMAIL/CONTACT_TO/EMAIL_USER missing).');
+    return res.status(500).json({ message: 'Mail recipient not configured on server.' });
+  }
+
+  try {
+    await transporter.sendMail({
+      to: TO,
+      channel: 'contact',
+      replyTo: email,
+      subject: `Contact form — ${name} <${email}>`,
+      text: message,
+      html: `
+        <p><b>From:</b> ${name} &lt;${email}&gt;</p>
+        <pre style="white-space:pre-wrap;font-family:inherit">${message}</pre>
+      `,
+    });
+
+    return res.json({ message: 'Message sent.' });
+  } catch (err) {
+    console.error('[CONTACT] sendMail error:', safeMailError(err));
+    return res.status(500).json({ message: 'Mail sending failed.' });
+  }
+});
+
+export const updateUserProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { nickname } = req.body;
+
+    const updatedData = { nickname };
+
+    if (req.file) {
+      return res.status(400).json({
+        message: 'Avatar uploads must use /api/users/updateUserProfile.',
+      });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(userId, updatedData, { new: true });
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'Korisnik nije pronađen' });
+    }
+
+    res.status(200).json({ user: {
+      _id: updatedUser._id,
+      name: updatedUser.name,
+      nickname: updatedUser.nickname,
+      email: updatedUser.email,
+      avatarUrl: updatedUser.avatarUrl,
+      isAdmin: !!updatedUser.isAdmin,
+      isUser: !!updatedUser.isUser,
+      isVerified: !!updatedUser.isVerified,
+      provider: updatedUser.provider,
+      entitlements: getEntitlements(updatedUser),
+      competitionPrivacy: competitionPrivacyDto(updatedUser),
+      presencePrivacy: presencePrivacyDto(updatedUser),
+    } });
+  } catch (err) {
+    console.error('[AUTH UPDATE ERROR]:', err);
+
+    if (err.code === 11000 && err.keyPattern?.nickname) {
+      return res.status(409).json({ message: 'Taj nadimak je već zauzet.' });
+    }
+
+    res.status(500).json({ message: 'Greška pri ažuriranju profila.' });
+  }
+};
