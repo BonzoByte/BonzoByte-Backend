@@ -1,4 +1,12 @@
 node_modules/
+dist/
+.angular/
+.vercel/
 .env
 .env.*
+coverage/
+audit/
+logs/
+uploads/
+test/
 *.log

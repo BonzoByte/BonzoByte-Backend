@@ -79,19 +79,23 @@ const userSchema = new mongoose.Schema({
         grants: { type: [new mongoose.Schema({ paymentId: String, paidAt: Date, durationMs: Number, revokedAt: Date }, { _id: false })], default: [] },
     }, { _id: false }), default: undefined },
 
-    // Live receipts and earned access remain separate from Sandbox test grants.
+    // Real provider receipts never share the Sandbox ledger or its test clocks.
     liveBillingMembership: { type: new mongoose.Schema({
-        version: { type: Number, required: true }, environment: { type: String, enum: ['live'], required: true },
+        version: { type: Number, required: true },
+        environment: { type: String, enum: ['live'], required: true },
         baselineAt: { type: Date, required: true }, baselineTrialMs: { type: Number, min: 0, required: true },
         trialCredits: { type: [new mongoose.Schema({ at: Date, durationMs: Number, referralId: mongoose.Schema.Types.ObjectId }, { _id: false })], default: [] },
         grants: { type: [new mongoose.Schema({ paymentId: String, paidAt: Date, durationMs: Number, revokedAt: Date }, { _id: false })], default: [] },
     }, { _id: false }), default: undefined },
+
+    // Earned access is separate from provider payments and cannot be written by profile APIs.
     earnedMembership: { type: new mongoose.Schema({
         version: Number, environment: { type: String, enum: ['development', 'production'] },
         baselineAt: Date, baselineTrialMs: Number,
         trialCredits: { type: [new mongoose.Schema({ at: Date, durationMs: Number, referralId: mongoose.Schema.Types.ObjectId }, { _id: false })], default: [] },
         grants: { type: [new mongoose.Schema({ awardId: String, grantedAt: Date, durationMs: Number, revokedAt: Date }, { _id: false })], default: [] },
     }, { _id: false }), default: undefined },
+
     trial: {
         startedAt: { type: Date, default: null },
         endsAt: { type: Date, default: null, index: true },

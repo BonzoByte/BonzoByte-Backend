@@ -2,8 +2,12 @@ import { deletionError } from './accountDeletion.js';
 import { eraseDiscussions } from './discussionCleanup.js';
 import { PRIVATE_MESSAGE_COLLECTIONS } from '../models/privateMessages.model.js';
 import { erasePrivateMessages } from './privateMessagesCleanup.js';
+import { ARCADE_COLLECTIONS } from './arcade.js';
+import { FANTASY_COLLECTIONS } from './fantasyPolicy.js';
 
 export const ACCOUNT_COLLECTIONS = {
+    ...ARCADE_COLLECTIONS,
+    ...FANTASY_COLLECTIONS,
     ...PRIVATE_MESSAGE_COLLECTIONS,
     users: 'users', favourites: 'favouriteplayers', matches: 'favouritematches', picks: 'picks', competition: 'competitionpicks',
     invitations: 'referralinvitations', payments: 'planpayments', events: 'planpaymentevents',
@@ -20,9 +24,12 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
     const payments = async (user, options = {}) => (await Promise.all(['payments', 'previews', 'labPayments']
         .map(key => c(key).find({ user: user._id }, options).toArray()))).flat();
     async function check(user, at) {
+        // Real financial receipts require a retention/refund review, never the
+        // automatic Sandbox cleanup or a silent loss of financial evidence.
         if (user.subscription?.provider && user.subscription.provider !== 'none' && user.subscription.subscriptionId !== 'billing-lab')
             throw deletionError('DELETION_RETENTION_REVIEW');
-        if (names.livePayments && await c('livePayments').findOne({ user: user._id })) throw deletionError('DELETION_RETENTION_REVIEW');
+        if (names.livePayments && await c('livePayments').findOne({ user: user._id }))
+            throw deletionError('DELETION_RETENTION_REVIEW');
         const plans = await c('payments').find({ user: user._id }).toArray();
         if (plans.some(p => p.environment !== 'sandbox')) throw deletionError('DELETION_RETENTION_REVIEW');
         const rows = await payments(user);
@@ -36,7 +43,7 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
         const ids = rows.map(p => p._id), orderIds = rows.map(p => p.orderId).filter(Boolean);
         const notifications = await c('mail').find({ payment: { $in: ids } }, options).toArray();
         // No retained payment IDs/digests are treated as anonymous statistics.
-        for (const key of ['favourites', 'matches', 'picks', 'competition']) await c(key).deleteMany({ userId: user._id }, options);
+        for (const key of ['favourites', 'matches', 'picks', 'competition', 'arcadeProfiles', 'arcadeSeasons', 'arcadeSessions', 'fantasyTeams', 'fantasyLedger', 'fantasyAwards']) await c(key).deleteMany({ userId: user._id }, options);
         await eraseDiscussions(connection, user._id, session, {
             comments: names.discussionComments, threads: names.discussionThreads, states: names.discussionStates,
             reports: names.discussionReports, spam: names.discussionSpam,

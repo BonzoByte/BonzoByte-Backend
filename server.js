@@ -52,12 +52,16 @@ import { createMatchLinksRouter } from './routes/matchLinks.routes.js';
 import { matchLinks } from './utils/matchLinksRuntime.js';
 import { createCompetitionRouter, competitionHeaders, competitionJsonError } from './routes/competition.routes.js';
 import { competition, initializeCompetition } from './utils/competitionRuntime.js';
+import { createArcadeRouter, arcadeHeaders, arcadeJsonError } from './routes/arcade.routes.js';
+import { arcade, initializeArcade } from './utils/arcadeRuntime.js';
+import { createFantasyRouter, fantasyHeaders, fantasyJsonError } from './routes/fantasy.routes.js';
+import { fantasy, fantasyAvailable, initializeFantasy } from './utils/fantasyRuntime.js';
 
 const ARCHIVES_ONLY = String(env.ARCHIVES_ONLY || '').toLowerCase() === 'true';
 
 const app = express();
 const recoveryPreview = Boolean(process.env.BONZOBYTE_RECOVERY_OVERLAY || process.env.BONZOBYTE_REVIEWED_ARCHIVES
-    || process.env.BONZOBYTE_REVIEWED_LOCAL_RELEASE || process.env.BONZOBYTE_REVIEWED_REPORTS);
+    || process.env.BONZOBYTE_REVIEWED_LOCAL_RELEASE || process.env.BONZOBYTE_REVIEWED_REPORTS || process.env.BONZOBYTE_LOCAL_ARCADE_PREVIEW === 'true');
 if (recoveryPreview) {
     if (env.NODE_ENV !== 'development' || env.APP_STAGE !== 'development') throw new Error('Recovery backend requires local development.');
     app.use((req, res, next) => {
@@ -76,6 +80,8 @@ app.use('/api/discussions', discussionsHeaders);
 app.use('/api/private-messages', privateMessagesHeaders);
 app.use('/api/notifications', notificationHeaders);
 app.use('/api/competition', competitionHeaders);
+app.use('/api/arcade', arcadeHeaders);
+app.use('/api/fantasy', fantasyHeaders);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -107,6 +113,8 @@ app.use('/api/favourites', json({ limit: '8kb' }), favouritesJsonError);
 app.use('/api/discussions', json({ limit: DISCUSSION_JSON_LIMIT }), discussionsJsonError);
 app.use('/api/private-messages', json({ limit: DISCUSSION_JSON_LIMIT }), privateMessagesJsonError);
 app.use('/api/competition', json({ limit: '4kb' }), competitionJsonError);
+app.use('/api/arcade', json({ limit: '900kb' }), arcadeJsonError);
+app.use('/api/fantasy', json({ limit: '8kb' }), fantasyJsonError);
 app.use(json({ limit: '1mb' }));
 app.use(urlencoded({ extended: true }));
 if (billingLabEnabled) {
@@ -221,6 +229,8 @@ if (!ARCHIVES_ONLY) {
     if (!billingLabEnabled) app.use('/api/presence', createPresenceRouter({ read: readPresence, available: notificationsAvailable }));
     if (!billingLabEnabled) app.use('/api/match-links', createMatchLinksRouter({ service: matchLinks }));
     if (!billingLabEnabled) app.use('/api/competition', createCompetitionRouter({ service: competition }));
+    if (!billingLabEnabled) app.use('/api/arcade', createArcadeRouter({ service: arcade }));
+    if (!billingLabEnabled) app.use('/api/fantasy', createFantasyRouter({ store: fantasy, available: fantasyAvailable }));
 } else {
     console.log('🟢 ARCHIVES_ONLY: mounting only /api/archives (no DB routes).');
 }
@@ -257,6 +267,8 @@ if (!ARCHIVES_ONLY) {
     await initializePopularity();
     await initializeFavourites();
     await initializeCompetition();
+    await initializeArcade();
+    await initializeFantasy();
 } else {
     console.log('🔕 ARCHIVES_ONLY mode: skipping DB connect.');
 }

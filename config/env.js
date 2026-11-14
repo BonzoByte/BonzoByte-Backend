@@ -49,14 +49,14 @@ const Env = z.object({
     REFERRALS_ENABLED: z.enum(['true', 'false']).default('false'),
     PAYPAL_SANDBOX_ENABLED: z.enum(['true', 'false']).default('false'),
     PAYPAL_MEMBERSHIP_ENABLED: z.enum(['true', 'false']).default('false'),
-    PAYPAL_LIVE_ENABLED: z.enum(['true', 'false']).default('false'),
-    PAYPAL_LIVE_CLIENT_ID: asOptionalString,
-    PAYPAL_LIVE_CLIENT_SECRET: asOptionalString,
-    PAYPAL_LIVE_WEBHOOK_ID: asOptionalString,
     BILLING_EMAIL_ENABLED: z.enum(['true', 'false']).default('false'),
     PAYPAL_CLIENT_ID: asOptionalString,
     PAYPAL_CLIENT_SECRET: asOptionalString,
     PAYPAL_SANDBOX_WEBHOOK_ID: asOptionalString,
+    PAYPAL_LIVE_ENABLED: z.enum(['true', 'false']).default('false'),
+    PAYPAL_LIVE_CLIENT_ID: asOptionalString,
+    PAYPAL_LIVE_CLIENT_SECRET: asOptionalString,
+    PAYPAL_LIVE_WEBHOOK_ID: asOptionalString,
 
     DETAILS_LOCK_HOURS: z.coerce
         .number()

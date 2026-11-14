@@ -1,0 +1,16 @@
+{
+  "schema": "bonzobyte.arcade-kernel.v1",
+  "version": "69e61a041a221b80e2c2fbcabeae9d130aa96e5e35860274870c4d579e7a5e9d",
+  "files": {
+    "tennis-scoring.cjs": "29e521d92fd615c0d242d3d4a02ea45ca98e3bdf3bf405e55c8d80ea572e4481",
+    "tennis-skill.cjs": "3038f1fea8d6ac9d45fd03a5240611b2b0bce13b01c614d9ff7f0362987c57dd",
+    "tennis-3d-engine.cjs": "5350b3b0afa66718f13382094b468a1f86d3d3838c6314e2c1835c8117c22263",
+    "tennis-replay.cjs": "563886c0e800076467c29fc959bcdb4193ac8519a82ce1061295a8bdc3f5f62a"
+  },
+  "sourceFiles": {
+    "tennis-scoring.ts": "1a1f0cbc0ddc8e46c7d3779821b31e0420eb979efa5d9612679c2201c9cb3b03",
+    "tennis-skill.ts": "d4541cda95c98ff07bcb3eb0f56aca918b5aa2bee7a20153abcc0e75b540d81f",
+    "tennis-3d-engine.ts": "64055847a7864abef6e77a1926194cf5c6e51fa480487d592faba117f38b92f2",
+    "tennis-replay.ts": "dce7fb685b8895c0e849e15f45158b0efb6193a631544513cb0ae350a38e3b37"
+  }
+}
