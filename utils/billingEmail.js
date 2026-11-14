@@ -21,14 +21,15 @@ export function billingEmailFailure(error, attempts) {
 }
 
 export function createBillingEmailQueue({ Outbox, mailer, enabled = false, now = () => new Date(), logger = console,
-    canSendPayment = async () => true }) {
+    canSendPayment = async () => true, environment = 'sandbox' }) {
+    if (!['sandbox', 'live'].includes(environment)) throw new Error('Invalid billing notification environment');
     return {
         newOrderFields: enabled ? { notificationVersion: 1 } : {},
 
         async enqueue({ payment, member, rights, at, session, fullRefundConfirmed = false }) {
             // The marker is immutable and has no default: toggling the setting or
             // deploying this code cannot backfill historical payments.
-            if (payment.notificationVersion !== 1 || payment.environment !== 'sandbox') return;
+            if (payment.notificationVersion !== 1 || payment.environment !== environment) return;
             const kind = payment.revokedAt
                 ? (payment.revocationReason === 'refund' && fullRefundConfirmed ? 'refund' : null)
                 : (payment.status === 'completed' && payment.grantStartedAt ? 'purchase' : null);
@@ -45,7 +46,7 @@ export function createBillingEmailQueue({ Outbox, mailer, enabled = false, now =
                 failureCode = safeMailCodes.has(error?.code) ? error.code : 'SNAPSHOT_INVALID';
             }
             await Outbox.updateOne(filter, { $setOnInsert: {
-                ...filter, environment: 'sandbox', idempotencyKey: `bonzobyte/sandbox/${payment._id}/${kind}/v1`,
+                ...filter, environment, idempotencyKey: `bonzobyte/${environment}/${payment._id}/${kind}/v1`,
                 payload, state: failureCode ? 'review' : 'pending', failureCode,
                 attempts: 0, nextAttemptAt: at, createdAt: at, updatedAt: at,
             } }, { upsert: true, session, timestamps: false });
@@ -56,7 +57,7 @@ export function createBillingEmailQueue({ Outbox, mailer, enabled = false, now =
             if (!enabled || !mailer.isConfigured || mailer.provider !== 'resend') return result;
             for (let i = 0; i < Math.min(Math.max(limit, 0), 5); i++) {
                 const at = now(), leaseId = crypto.randomUUID();
-                const row = await Outbox.findOneAndUpdate({ environment: 'sandbox', $or: [
+                const row = await Outbox.findOneAndUpdate({ environment, $or: [
                     { state: 'pending', nextAttemptAt: { $lte: at } },
                     { state: 'sending', leaseUntil: { $lte: at } },
                 ] }, [{ $set: { state: 'sending', leaseId, leaseUntil: new Date(at.getTime() + LEASE_MS),

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { sandboxMembershipAllowed } from './paidMembership.js';
 
 export const REFERRAL_DAYS = 7;
 export const REFERRAL_MIN_AGE_MS = 120_000;
@@ -56,6 +57,24 @@ export function referralRewardPipeline(referredId, now) {
                 { $concatArrays: [{ $ifNull: ['$billingMembership.trialCredits', []] },
                     [{ at: now, durationMs: REFERRAL_DAYS * 86400000, referralId: referredId }]] } }] },
             '$$REMOVE',
+        ] },
+        liveBillingMembership: { $cond: [
+            { $and: [{ $eq: ['$liveBillingMembership.version', 1] }, { $eq: ['$liveBillingMembership.environment', 'live'] }] },
+            { $mergeObjects: ['$liveBillingMembership', { trialCredits: { $concatArrays: [
+                { $ifNull: ['$liveBillingMembership.trialCredits', []] },
+                [{ at: now, durationMs: REFERRAL_DAYS * 86400000, referralId: referredId }],
+            ] } }] }, '$$REMOVE',
+        ] },
+        earnedMembership: { $cond: [
+            { $eq: ['$earnedMembership.version', 1] },
+            { $cond: [{ $or: [
+                { $and: [{ $eq: ['$liveBillingMembership.version', 1] }, { $eq: ['$liveBillingMembership.environment', 'live'] }] },
+                sandboxMembershipAllowed() ? { $cond: [{ $eq: ['$billingMembership.version', 1] }, { $eq: ['$billingMembership.environment', 'sandbox'] }, false] } : false,
+            ] }, '$earnedMembership',
+                { $mergeObjects: ['$earnedMembership', { trialCredits: { $concatArrays: [
+                    { $ifNull: ['$earnedMembership.trialCredits', []] },
+                    [{ at: now, durationMs: REFERRAL_DAYS * 86400000, referralId: referredId }],
+                ] } }] }] }, '$$REMOVE',
         ] },
         'referral.count': { $add: [{ $ifNull: ['$referral.count', 0] }, 1] },
         'referral.lastReferralAt': now,

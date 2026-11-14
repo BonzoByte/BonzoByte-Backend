@@ -10,7 +10,7 @@ export function hasActiveTrial(u) {
 }
 
 export function hasActiveSubscription(u) {
-    return evaluateMembership({ subscription: u?.subscription, billingMembership: u?.billingMembership }).isPremium;
+    return evaluateMembership({ subscription: u?.subscription, billingMembership: u?.billingMembership, liveBillingMembership: u?.liveBillingMembership }).isPremium;
 }
 
 export function isPremium(u) {

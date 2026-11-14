@@ -4,6 +4,7 @@ import { evaluateMembership } from './membership.js';
 import { assertBillingLabDatabase, BILLING_LAB_DURATION_MS } from './billingLabSafety.js';
 import { billingError, paypalId } from './paypalSandboxApi.js';
 import { DAY_MS, paidMembershipWindows } from './paidMembership.js';
+import { earnedEnvironment } from './earnedMembership.js';
 
 const equalId = (a, b) => String(a) === String(b);
 export function verifiedLabOrder(order, payment) {
@@ -37,33 +38,39 @@ function verifiedRefund(refund, payment) {
     return refund;
 }
 
-// Lab and full-duration sandbox plans share the verified payment engine but use
-// distinct guards, collections and entitlement models. No Live endpoint exists.
+// Provider evidence and transaction arithmetic are shared. Each mode supplies
+// its own guarded API, collections and entitlement ledger; no receipt migration.
 // All grant/revoke changes commit with their receipts in a Mongo transaction.
-export function createBillingLab({ connection, Payment, Event, User, api, now = () => new Date(), planMode = false, assertPlanEnvironment, notifications }) {
+export function createBillingLab({ connection, Payment, Event, User, api, now = () => new Date(), planMode = false, liveMode = false, assertPlanEnvironment, notifications }) {
+    if (liveMode && (!planMode || api?.environment !== 'live')) throw billingError('LIVE_BILLING_ENVIRONMENT_REQUIRED', 503);
+    const paymentEnvironment = liveMode ? 'live' : 'sandbox';
+    const ledgerKey = liveMode ? 'liveBillingMembership' : 'billingMembership';
     const guard = () => {
         if (!planMode) return assertBillingLabDatabase(connection);
         if (typeof assertPlanEnvironment !== 'function') throw billingError('PLAN_ENVIRONMENT_REQUIRED', 503);
         assertPlanEnvironment();
     };
-    const fulfillment = planMode ? 'sandbox-plans' : 'isolated-lab';
-    const membership = member => evaluateMembership(member, now(), { allowSandboxMembership: planMode });
+    const fulfillment = liveMode ? 'live-plans' : planMode ? 'sandbox-plans' : 'isolated-lab';
+    const membership = member => evaluateMembership(member, now(), { allowSandboxMembership: planMode && !liveMode });
     const validPlanPayment = row => {
-        if (planMode && (row?.environment !== 'sandbox' || row.version !== 1 || !Number.isInteger(row.durationDays)
-            || row.durationDays < 1 || row.durationDays > 365 || row.plan === 'founders')) throw billingError('PAYMENT_MISMATCH', 409);
+        if (planMode && (row?.environment !== paymentEnvironment || row.version !== 1 || !Number.isInteger(row.durationDays)
+            || row.durationDays < 1 || row.durationDays > 365 || row.plan === 'founders'
+            || (liveMode && (row.testClockAdjustment || row.testDurationMs != null)))) throw billingError('PAYMENT_MISMATCH', 409);
     };
     async function initializeLedger(user) {
         if (!planMode) return;
         await connection.transaction(async session => {
             const member = await User.findById(user._id).session(session);
             if (!member) throw billingError('USER_NOT_FOUND', 404);
+            if (liveMode && (member.testAccount || member.accountClosure?.requestedAt)) throw billingError('BILLING_ACCOUNT_UNAVAILABLE', 409);
             const rights = membership(member);
-            if (member.vip?.enabled || member.isAdmin || (rights.isPremium && !rights.sandboxMembership))
+            if (member.vip?.enabled || member.isAdmin || (rights.isPremium && !rights.sandboxMembership && !rights.earnedMembership && !rights.liveMembership))
                 throw billingError('UNMANAGED_MEMBERSHIP', 409);
-            if (!member.billingMembership) {
+            if (!member[ledgerKey]) {
                 const at = now();
-                member.billingMembership = { version: 1, environment: 'sandbox', baselineAt: at,
-                    baselineTrialMs: rights.hasTrial ? Math.max(0, new Date(member.trial?.endsAt ?? 0).getTime() - at.getTime()) || 0 : 0,
+                const earned = !liveMode || (member.earnedMembership?.version === 1 && member.earnedMembership.environment === earnedEnvironment()) ? member.earnedMembership : null;
+                member[ledgerKey] = { version: 1, environment: paymentEnvironment, baselineAt: earned?.baselineAt ?? at,
+                    baselineTrialMs: earned?.baselineTrialMs ?? (rights.hasTrial ? rights.trialRemainingMs : 0),
                     trialCredits: [], grants: [] };
                 await member.save({ session });
             }
@@ -145,15 +152,18 @@ export function createBillingLab({ connection, Payment, Event, User, api, now = 
                 return;
             }
             if (planMode) {
-                if (!member.billingMembership || member.billingMembership.version !== 1 || member.billingMembership.environment !== 'sandbox')
+                if (!member[ledgerKey] || member[ledgerKey].version !== 1 || member[ledgerKey].environment !== paymentEnvironment)
                     throw billingError('MEMBERSHIP_LEDGER_REQUIRED', 409);
                 // Rebuild from this version's receipts in the SAME transaction. User is the
                 // shared serialization point for concurrent purchases/refunds/referral credits.
-                const receipts = await Payment.find({ user: row.user, environment: 'sandbox', version: 1,
+                const receipts = await Payment.find({ user: row.user, environment: paymentEnvironment, version: 1,
                     grantStartedAt: { $exists: true } }).session(session);
-                member.billingMembership.grants = receipts.map(p => ({ paymentId: String(p._id), paidAt: p.grantStartedAt,
-                    durationMs: p.testDurationMs ?? p.durationDays * DAY_MS, revokedAt: p.revokedAt ?? null }));
-                const windows = paidMembershipWindows(member.billingMembership.grants);
+                for (const p of receipts) validPlanPayment(p);
+                member[ledgerKey].grants = receipts.map(p => ({ paymentId: String(p._id), paidAt: p.grantStartedAt,
+                    durationMs: liveMode ? p.durationDays * DAY_MS : p.testDurationMs ?? p.durationDays * DAY_MS, revokedAt: p.revokedAt ?? null }));
+                const earned = liveMode && member.earnedMembership?.version === 1 && member.earnedMembership.environment === earnedEnvironment()
+                    ? member.earnedMembership.grants.map(g => ({ paymentId: 'earned:' + g.awardId, paidAt: g.grantedAt, durationMs: g.durationMs, revokedAt: g.revokedAt })) : [];
+                const windows = paidMembershipWindows([...member[ledgerKey].grants, ...earned]);
                 for (const p of receipts) {
                     const end = windows.find(w => w.paymentId === String(p._id))?.end;
                     if (end && p.grantEndsAt?.getTime() !== end)
@@ -189,7 +199,8 @@ export function createBillingLab({ connection, Payment, Event, User, api, now = 
         const member = await User.findById(user._id);
         if (!member) throw billingError('USER_NOT_FOUND', 404);
         const payments = await Payment.find({ user: user._id, orderId: { $exists: true } }).sort({ createdAt: -1 }).limit(10);
-        return { sandbox: true, fulfillment, durationSeconds: planMode ? null : BILLING_LAB_DURATION_MS / 1000,
+        for (const payment of payments) validPlanPayment(payment);
+        return { sandbox: !liveMode, fulfillment, durationSeconds: planMode ? null : BILLING_LAB_DURATION_MS / 1000,
             entitlements: membership(member), payments: payments.map(p => ({ ...publicPayment(p), ...(planMode ? {
                 capturePending: !p.grantStartedAt && !p.revokedAt && (p.status === 'pending'
                     || (!!p.captureRequestedAt && p.captureRequestUntil > now()
@@ -215,7 +226,7 @@ export function createBillingLab({ connection, Payment, Event, User, api, now = 
             let payment;
             try { payment = await Payment.findOneAndUpdate({ user: user._id, requestId }, { $setOnInsert: {
                 user: user._id, requestId, plan, amount: planMode ? BILLING_PLANS[plan].priceEur.toFixed(2) : '0.01', currency: 'EUR', nextCheckAt: now(),
-                ...(planMode ? { environment: 'sandbox', version: 1, durationDays: BILLING_PLANS[plan].durationDays,
+                ...(planMode ? { environment: paymentEnvironment, version: 1, durationDays: BILLING_PLANS[plan].durationDays,
                     ...notifications?.newOrderFields } : {}),
             } }, { upsert: true, new: true }); }
             catch (error) {
@@ -226,7 +237,7 @@ export function createBillingLab({ connection, Payment, Event, User, api, now = 
             validPlanPayment(payment);
             if (payment.orderId) return { orderId: payment.orderId };
             const order = await api.request('/v2/checkout/orders', 'POST', { intent: 'CAPTURE', purchase_units: [{
-                custom_id: String(payment._id), description: planMode ? `BonzoByte ${plan} - ${payment.durationDays} days (Sandbox)` : 'BonzoByte isolated billing lab: 5-minute test access',
+                custom_id: String(payment._id), description: planMode ? `BonzoByte ${plan} - ${payment.durationDays} days${liveMode ? '' : ' (Sandbox)'}` : 'BonzoByte isolated billing lab: 5-minute test access',
                 amount: { value: payment.amount, currency_code: 'EUR' },
             }], application_context: { shipping_preference: 'NO_SHIPPING' } }, String(payment._id) + '-create');
             if (!paypalId(order?.id)) throw billingError('PAYPAL_UNAVAILABLE');
@@ -275,7 +286,7 @@ export function createBillingLab({ connection, Payment, Event, User, api, now = 
             if (row.refundId) refund = await api.request(`/v2/payments/refunds/${row.refundId}`);
             else {
                 try { refund = await api.request(`/v2/payments/captures/${row.captureId}/refund`, 'POST', {
-                    amount: { value: row.amount, currency_code: row.currency }, note_to_payer: 'BonzoByte sandbox test refund',
+                    amount: { value: row.amount, currency_code: row.currency }, note_to_payer: liveMode ? 'BonzoByte membership refund' : 'BonzoByte sandbox test refund',
                 }, String(row._id) + '-refund'); }
                 catch (error) {
                     if (error.code !== 'CAPTURE_FULLY_REFUNDED') throw error;
@@ -311,7 +322,7 @@ export function createBillingLab({ connection, Payment, Event, User, api, now = 
                     if (link.rel !== 'up') continue;
                     try {
                         const url = new URL(link.href);
-                        if (url.protocol === 'https:' && ['api.sandbox.paypal.com', 'api-m.sandbox.paypal.com'].includes(url.hostname)
+                        if (url.protocol === 'https:' && (liveMode ? ['api.paypal.com', 'api-m.paypal.com'] : ['api.sandbox.paypal.com', 'api-m.sandbox.paypal.com']).includes(url.hostname)
                             && !url.username && !url.password && !url.port && !url.search && !url.hash)
                             captureId ||= /^\/v2\/payments\/captures\/([A-Z0-9]{10,32})$/.exec(url.pathname)?.[1];
                     } catch { /* Invalid provider link cannot select a payment. */ }

@@ -1,4 +1,5 @@
-import { evaluatePaidMembership, sandboxMembershipAllowed } from './paidMembership.js';
+import { evaluatePaidMembership, evaluateMembershipTimeline, liveMembershipLedger, sandboxMembershipAllowed } from './paidMembership.js';
+import { evaluateEarnedMembership } from './earnedMembership.js';
 // Membership uses real time, never the historical/archive preview clock.
 // Tests pass an explicit instant; no environment override can prolong paid access.
 const timestamp = value => value ? new Date(value).getTime() : NaN;
@@ -8,7 +9,12 @@ export function evaluateMembership(user, now = new Date(), options = {}) {
     const nowMs = now.getTime();
     if (!Number.isFinite(nowMs)) throw new TypeError('Invalid membership clock');
     const trialStart = user?.trial?.startedAt ?? user?.trial?.lastGrantedAt;
-    const paid = (options.allowSandboxMembership ?? sandboxMembershipAllowed()) ? evaluatePaidMembership(user?.billingMembership, now) : null;
+    const allowSandbox = options.allowSandboxMembership ?? sandboxMembershipAllowed();
+    const liveLedger = liveMembershipLedger(user);
+    const live = liveLedger ? evaluateMembershipTimeline(liveLedger, now) : null;
+    const sandbox = allowSandbox && !liveLedger ? evaluatePaidMembership(user?.billingMembership, now) : null;
+    const earned = evaluateEarnedMembership(user, now, { allowSandbox: allowSandbox && !liveLedger, environment: options.rewardEnvironment });
+    const paid = earned ?? live ?? sandbox;
     const trialEnd = timestamp(paid ? paid.trialEndsAt : user?.trial?.endsAt);
     const hasTrial = paid ? paid.hasTrial : Number.isFinite(trialEnd) && trialEnd > nowMs
         && (!trialStart || timestamp(trialStart) <= nowMs);
@@ -40,7 +46,9 @@ export function evaluateMembership(user, now = new Date(), options = {}) {
         trialEndsAt: Number.isFinite(trialEnd) ? new Date(trialEnd).toISOString() : null,
         trialResumesAt: iso(paid?.trialResumesAt),
         trialRemainingMs: paid?.trialRemainingMs ?? Math.max(0, (trialEnd || 0) - nowMs),
-        sandboxMembership: !!paid?.premium,
+        sandboxMembership: !!sandbox?.premium,
+        liveMembership: !!live?.premium,
+        earnedMembership: !!earned?.premium,
         subscriptionEndsAt: lifetime ? null : Number.isFinite(subscriptionEnd) ? new Date(subscriptionEnd).toISOString() : null,
         membershipEndsAt: tier === 'trial' && Number.isFinite(trialEnd) ? new Date(trialEnd).toISOString()
             : tier === 'premium' && Number.isFinite(subscriptionEnd) ? new Date(subscriptionEnd).toISOString() : null,

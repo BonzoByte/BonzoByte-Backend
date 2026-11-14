@@ -20,8 +20,18 @@ export function paidMembershipWindows(grants = []) {
     return windows;
 }
 export function evaluatePaidMembership(state, now = new Date()) {
+    if (state?.environment !== 'sandbox') return null;
+    return evaluateMembershipTimeline(state, now);
+}
+export function liveMembershipLedger(user) {
+    const state = user?.liveBillingMembership;
+    return state?.version === PLAN_MEMBERSHIP_VERSION && state.environment === 'live' ? state : null;
+}
+// Shared replay arithmetic only. Callers must validate the entitlement source
+// and environment before using it; this function never authorizes a grant.
+export function evaluateMembershipTimeline(state, now = new Date()) {
     const at = now.getTime(), base = ms(state?.baselineAt);
-    if (state?.version !== PLAN_MEMBERSHIP_VERSION || state?.environment !== 'sandbox'
+    if (state?.version !== PLAN_MEMBERSHIP_VERSION
         || !Number.isFinite(base) || base > at) return null;
     const windows = paidMembershipWindows(state.grants);
     const credits = [{ at: base, amount: Math.max(0, Number(state.baselineTrialMs) || 0) },

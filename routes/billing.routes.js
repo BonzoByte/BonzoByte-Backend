@@ -8,13 +8,16 @@ import { createSandboxMembershipPreview } from '../utils/sandboxMembershipPrevie
 import { billingLab } from '../utils/billingLabRuntime.js';
 import { createBillingModule } from '../utils/billingModule.js';
 import { planBilling } from '../utils/planBillingRuntime.js';
+import { liveBilling, liveBillingEnabled } from '../utils/liveBillingRuntime.js';
 
-const config = { enabled: env.PAYPAL_SANDBOX_ENABLED === 'true', nodeEnv: env.NODE_ENV,
+const config = liveBillingEnabled ? { environment: 'live', enabled: true,
+    clientId: env.PAYPAL_LIVE_CLIENT_ID, secret: env.PAYPAL_LIVE_CLIENT_SECRET } : {
+    enabled: env.PAYPAL_SANDBOX_ENABLED === 'true', nodeEnv: env.NODE_ENV,
     clientId: env.PAYPAL_CLIENT_ID, secret: env.PAYPAL_CLIENT_SECRET };
-const checkout = createSandboxCheckout({ Payment, config });
-const membershipPreview = createSandboxMembershipPreview({ Payment, config });
-const billing = createBillingModule({ config, checkout, membershipPreview, lab: billingLab, plans: planBilling,
-    webhookConfigured: !!env.PAYPAL_SANDBOX_WEBHOOK_ID });
+const checkout = liveBillingEnabled ? null : createSandboxCheckout({ Payment, config });
+const membershipPreview = liveBillingEnabled ? null : createSandboxMembershipPreview({ Payment, config });
+const billing = createBillingModule({ config, checkout, membershipPreview, lab: billingLab, plans: planBilling, live: liveBilling,
+    webhookConfigured: !!(liveBillingEnabled ? env.PAYPAL_LIVE_WEBHOOK_ID : env.PAYPAL_SANDBOX_WEBHOOK_ID) });
 const router = express.Router();
 router.get('/config', (_req, res) => {
     res.set('Cache-Control', 'no-store').json(billing.config());
@@ -25,8 +28,8 @@ const handle = fn => async (req, res) => {
     try { res.json(await fn(req)); }
     catch (error) { res.status(error.status || 500).json({ code: error.status ? error.code : 'PAYPAL_UNAVAILABLE' }); }
 };
-router.post('/orders', handle(req => billing.create(req.user, req.body.plan, req.body.requestId)));
-router.post('/orders/:orderId/capture', handle(req => billing.capture(req.user, req.params.orderId)));
+router.post('/orders', handle(req => billing.create(req.user, req.body.plan, req.body.requestId, req.body)));
+router.post('/orders/:orderId/capture', handle(req => billing.capture(req.user, req.params.orderId, req.body)));
 router.get('/payments', handle(req => billing.status(req.user)));
 router.post('/orders/:orderId/reconcile', handle(req => billing.reconcile(req.user, req.params.orderId)));
 router.post('/orders/:orderId/refund', handle(req => billing.refund(req.user, req.params.orderId)));

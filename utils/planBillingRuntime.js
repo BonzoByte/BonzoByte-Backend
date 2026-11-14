@@ -10,8 +10,9 @@ import { createBillingLab } from './billingLab.js';
 import { createPaypalSandboxApi, billingError } from './paypalSandboxApi.js';
 import { createBillingLabReconciliationRunner } from './billingLabReconciliation.js';
 import { billingLab, billingLabEnabled, billingLabWebhook } from './billingLabRuntime.js';
+import { liveBilling, liveBillingEnabled, initializeLiveBilling } from './liveBillingRuntime.js';
 
-export const planBillingEnabled = env.PAYPAL_MEMBERSHIP_ENABLED === 'true' && !billingLabEnabled;
+export const planBillingEnabled = env.PAYPAL_MEMBERSHIP_ENABLED === 'true' && !billingLabEnabled && !liveBillingEnabled;
 function guard() {
     if (!planBillingEnabled || env.NODE_ENV === 'production' || env.PAYPAL_SANDBOX_ENABLED !== 'true'
         || !env.PAYPAL_CLIENT_ID || !env.PAYPAL_CLIENT_SECRET || billingLabEnabled)
@@ -28,6 +29,7 @@ export const planBilling = planBillingEnabled ? createBillingLab({ connection: m
     api: createPaypalSandboxApi({ clientId: env.PAYPAL_CLIENT_ID, secret: env.PAYPAL_CLIENT_SECRET, webhookId: env.PAYPAL_SANDBOX_WEBHOOK_ID }),
 }) : null;
 export async function initializePlanBilling() {
+    await initializeLiveBilling();
     if (!planBilling) return;
     guard();
     const hello = await mongoose.connection.db.admin().command({ hello: 1 });
@@ -45,7 +47,8 @@ export async function initializePlanBilling() {
 export async function billingWebhook(req, res) {
     if (billingLab) return billingLabWebhook(req, res);
     res.set('Cache-Control', 'no-store');
-    if (!planBilling) return res.sendStatus(404);
-    try { res.json(await planBilling.webhook(req.body, req.headers)); }
+    const adapter = liveBilling || planBilling;
+    if (!adapter) return res.sendStatus(404);
+    try { res.json(await adapter.webhook(req.body, req.headers)); }
     catch (error) { res.status(error.status || 503).json({ code: error.status ? error.code : 'WEBHOOK_UNAVAILABLE' }); }
 }

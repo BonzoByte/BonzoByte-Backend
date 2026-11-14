@@ -7,6 +7,7 @@ export const ACCOUNT_COLLECTIONS = {
     ...PRIVATE_MESSAGE_COLLECTIONS,
     users: 'users', favourites: 'favouriteplayers', matches: 'favouritematches', picks: 'picks', competition: 'competitionpicks',
     invitations: 'referralinvitations', payments: 'planpayments', events: 'planpaymentevents',
+    livePayments: 'livepayments',
     previews: 'sandboxpayments', labPayments: 'billinglabpayments', labEvents: 'billinglabevents',
     mail: 'billingemails', challenges: 'deletionchallenges', betaChallenges: 'betachallenges', betaSessions: 'betasessions',
     popularityDevelopment: 'popularity_development_dedupe', popularitySandbox: 'popularity_sandbox_dedupe',
@@ -21,6 +22,7 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
     async function check(user, at) {
         if (user.subscription?.provider && user.subscription.provider !== 'none' && user.subscription.subscriptionId !== 'billing-lab')
             throw deletionError('DELETION_RETENTION_REVIEW');
+        if (names.livePayments && await c('livePayments').findOne({ user: user._id })) throw deletionError('DELETION_RETENTION_REVIEW');
         const plans = await c('payments').find({ user: user._id }).toArray();
         if (plans.some(p => p.environment !== 'sandbox')) throw deletionError('DELETION_RETENTION_REVIEW');
         const rows = await payments(user);
@@ -49,6 +51,12 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
         // Preserve earned time for OTHER users; remove only the identifying link.
         await c('users').updateMany({ 'billingMembership.trialCredits.referralId': user._id },
             { $unset: { 'billingMembership.trialCredits.$[credit].referralId': '' } },
+            { ...options, arrayFilters: [{ 'credit.referralId': user._id }] });
+        await c('users').updateMany({ 'liveBillingMembership.trialCredits.referralId': user._id },
+            { $unset: { 'liveBillingMembership.trialCredits.$[credit].referralId': '' } },
+            { ...options, arrayFilters: [{ 'credit.referralId': user._id }] });
+        await c('users').updateMany({ 'earnedMembership.trialCredits.referralId': user._id },
+            { $unset: { 'earnedMembership.trialCredits.$[credit].referralId': '' } },
             { ...options, arrayFilters: [{ 'credit.referralId': user._id }] });
         for (const key of ['payments', 'previews', 'labPayments']) await c(key).deleteMany({ user: user._id }, options);
         for (const key of ['events', 'labEvents']) await c(key).deleteMany({ orderId: { $in: orderIds } }, options);
