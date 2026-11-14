@@ -20,6 +20,7 @@ import { getEntitlements } from '../utils/entitlements.js';
 import { competitionPrivacyDto } from '../utils/competitionPrivacy.js';
 import { env } from '../config/env.js';
 import { createOAuthFlow } from '../utils/oauthFlow.js';
+import { isBetaAccountAllowed } from '../utils/accessPolicy.js';
 import { verificationIdentity, verificationStatus, resendVerification, verifyEmailCode, verifyEmailLink } from '../controllers/verification.controller.js';
 
 const router = express.Router();
@@ -81,8 +82,11 @@ router.post('/update', protect, updateUserProfile);
 
 // --- OAuth: Google ---
 const googleFlow = createOAuthFlow({ passport, provider: 'google', frontendUrl: FRONTEND,
-    callbackUrl: env.GOOGLE_CALLBACK_URL || new URL('/api/auth/google/callback', env.BASE_URL).href,
-    secret: () => env.JWT_SECRET, issueToken: generateToken });
+    callbackUrl: env.APP_STAGE === 'beta'
+        ? new URL('/api/auth/google/callback', env.BETA_PUBLIC_ORIGIN).href
+        : env.GOOGLE_CALLBACK_URL || new URL('/api/auth/google/callback', env.BASE_URL).href,
+    secret: () => env.JWT_SECRET, issueToken: generateToken,
+    authorizeUser: user => isBetaAccountAllowed(user.email) });
 router.get('/google', googleFlow.start);
 router.get('/google/callback', googleFlow.callback);
 

@@ -12,7 +12,7 @@ const safeUrl = value => {
 };
 
 /** Browser-bound, signed, short-lived state. No server session, identity or provider token is stored. */
-export function createOAuthFlow({ passport, provider, frontendUrl, callbackUrl, secret, issueToken, warn = message => console.warn(message), now = Date.now }) {
+export function createOAuthFlow({ passport, provider, frontendUrl, callbackUrl, secret, issueToken, authorizeUser = () => true, warn = message => console.warn(message), now = Date.now }) {
     if (!['google', 'facebook'].includes(provider)) throw new Error('Unsupported OAuth provider.');
     const frontend = safeUrl(frontendUrl), callback = safeUrl(callbackUrl);
     const secure = callback.protocol === 'https:';
@@ -58,8 +58,10 @@ export function createOAuthFlow({ passport, provider, frontendUrl, callbackUrl, 
                 return passport.authenticate(provider, { session: false, callbackURL: callback.href }, (error, user, info) => {
                     if (res.headersSent) return;
                     if (error) { diagnostic('provider'); return failure(res); }
-                    if (!user) return failure(res, info?.code === 'ACCOUNT_ERASURE_PENDING' ? 'account_erasure_pending' : 'oauth_failed');
+                    if (!user) return failure(res, info?.code === 'ACCOUNT_ERASURE_PENDING' ? 'account_erasure_pending'
+                        : info?.code === 'BETA_EMAIL_NOT_ALLOWED' ? 'beta_not_invited' : 'oauth_failed');
                     try {
+                        if (!authorizeUser(user)) return failure(res, 'beta_not_invited');
                         const token = issueToken(user._id, user.tokenVersion);
                         if (typeof token !== 'string' || !token) throw new Error('No access token.');
                         const target = new URL('/oauth-success', frontend.origin); target.hash = new URLSearchParams({ token }).toString();

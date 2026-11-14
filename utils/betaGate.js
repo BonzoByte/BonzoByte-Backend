@@ -53,7 +53,8 @@ export function createBetaGate({ access, publicOrigin }) {
             if (!session) return res.status(401).json({ code: 'BETA_ACCESS_REQUIRED' });
             req.betaTester = session;
             if (req.path === '/beta/session' && req.method === 'GET') return res.json({ betaAccess: true });
-            if (/^\/api\/auth\/(google|facebook|dev|debug)(\/|$)/i.test(req.path))
+            const google = req.method === 'GET' && ['/api/auth/google', '/api/auth/google/callback'].includes(req.path);
+            if (/^\/api\/auth\/(google|facebook|dev|debug)(\/|$)/i.test(req.path) && !google)
                 return res.status(404).json({ code: 'NOT_AVAILABLE_IN_BETA' });
             // Approved testers cannot use app emails/referrals to expand the list.
             if (req.body?.email !== undefined && (path.startsWith('/api/auth/') || path === '/api/referrals/invite')

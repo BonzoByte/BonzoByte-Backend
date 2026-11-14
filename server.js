@@ -154,7 +154,7 @@ const authLimiter = rateLimit({
 
 /* ----------------------------- Passport ----------------------------- */
 app.use(passport.initialize());
-if (!ARCHIVES_ONLY && !billingLabEnabled && !betaEnabled) {
+if (!ARCHIVES_ONLY && !billingLabEnabled) {
     await import('./config/passport.js');
 } else {
     console.log('[AUTH] OAuth strategies disabled in this isolated mode.');

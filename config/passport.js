@@ -5,6 +5,7 @@ import User from '../models/user.model.js';
 import { DeletionJob } from '../models/accountDeletion.model.js';
 import { createInitialTrial } from '../utils/trial.js';
 import { registrationBlockingDeletion } from '../utils/accountDeletionRegistration.js';
+import { isBetaAccountAllowed, normalizeEmail } from '../utils/accessPolicy.js';
 
 // Ensure the providers array contains the authenticated provider exactly once.
 function ensureProvider(user, providerName) {
@@ -20,8 +21,13 @@ passport.use(new GoogleStrategy(
     },
     async (_accessToken, _refreshToken, profile, done) => {
         try {
-            const email = profile.emails?.[0]?.value?.toLowerCase();
+            const email = normalizeEmail(profile.emails?.[0]?.value);
             const googleId = profile.id;
+            // Enforce the invite list before ANY identity lookup, linking or creation.
+            // A beta cookie alone does not authorize a different Google account.
+            if (process.env.APP_STAGE === 'beta' && (!isBetaAccountAllowed(email)
+                || !(profile._json?.email_verified === true || profile.emails?.[0]?.verified === true)))
+                return done(null, false, { code: 'BETA_EMAIL_NOT_ALLOWED' });
             const name = profile.displayName || '';
             const avatarUrl = profile.photos?.[0]?.value;
             if (await DeletionJob.exists(registrationBlockingDeletion({ googleId, email }))) return done(null, false, { code: 'ACCOUNT_ERASURE_PENDING' });
@@ -33,6 +39,9 @@ passport.use(new GoogleStrategy(
 
             if (user) {
                 if (user.accountClosure?.requestedAt) return done(null, false, { code: 'ACCOUNT_ERASURE_PENDING' });
+                if (process.env.APP_STAGE === 'beta' && (normalizeEmail(user.email) !== email
+                    || (user.googleId && user.googleId !== googleId)))
+                    return done(null, false, { code: 'BETA_EMAIL_NOT_ALLOWED' });
             // Fill fields that were unavailable during an earlier sign-in.
                 if (!user.googleId) user.googleId = googleId;
                 if (email && !user.email) user.email = email;
@@ -67,7 +76,8 @@ passport.use(new GoogleStrategy(
     }
 ));
 
-passport.use(new FacebookStrategy(
+// Facebook remains unavailable in the closed beta; only Google is being enabled.
+if (process.env.APP_STAGE !== 'beta') passport.use(new FacebookStrategy(
     {
         clientID: process.env.FACEBOOK_CLIENT_ID,
         clientSecret: process.env.FACEBOOK_CLIENT_SECRET,
