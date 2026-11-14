@@ -18,7 +18,9 @@ function register(folder, expectedVersion) {
     kernels.set(manifest.version, root);
     return manifest.version;
 }
-export const CURRENT_ARCADE_VERSION = register('./arcade-engine/');
+export const BASELINE_ARCADE_VERSION = '9890e39a1b78ad5565413f75993b70b7620bf525d93e89ea5b6b475989bc3f25';
+export const CURRENT_ARCADE_VERSION = register('./arcade-engine-3f9932e83cc2a7fbd209737038566aff5494930b274f0d8ae040558ea7a12600/', '3f9932e83cc2a7fbd209737038566aff5494930b274f0d8ae040558ea7a12600');
+register('./arcade-engine/', BASELINE_ARCADE_VERSION);
 register(`./arcade-engine-${PREVIOUS_ARCADE_VERSION}/`, PREVIOUS_ARCADE_VERSION);
 register(`./arcade-engine-${CHARGED_ARCADE_VERSION}/`, CHARGED_ARCADE_VERSION);
 export function arcadeKernel(version) { return kernels.get(version) ?? null; }
