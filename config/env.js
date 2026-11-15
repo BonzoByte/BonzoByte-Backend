@@ -31,6 +31,8 @@ const Env = z.object({
     FRONTEND_URL: z.string().url().default('https://bonzo-byte-frontend.vercel.app'),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     APP_STAGE: z.enum(['development', 'beta']).default('development'),
+    // Public browsing is an explicit opt-in, separate from isolated data/billing settings.
+    SITE_ACCESS_MODE: z.enum(['invited', 'public']).default('invited'),
     BETA_PUBLIC_ORIGIN: asOptionalUrl,
     BETA_TESTERS: z.string().default(''),
     BETA_CODE_SECRET: asOptionalString,

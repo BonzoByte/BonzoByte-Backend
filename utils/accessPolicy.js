@@ -32,8 +32,12 @@ export function forcePrivateHeaders(_req, res, next) {
     res.setHeader = (name, value) => original(name, headers[name.toLowerCase()] ?? value);
     res.set(privateHeaders); next();
 }
+export function publicSiteAccess(settings = process.env) {
+    return settings.APP_STAGE === 'beta' && settings.SITE_ACCESS_MODE === 'public';
+}
 export function isBetaAccountAllowed(email, settings = process.env) {
-    return settings.APP_STAGE !== 'beta' || emailAllowlist(settings.BETA_TESTERS).has(normalizeEmail(email));
+    return settings.APP_STAGE !== 'beta' || publicSiteAccess(settings)
+        || emailAllowlist(settings.BETA_TESTERS).has(normalizeEmail(email));
 }
 export function privateAccessLog(tokens, req, res) {
     // Route templates only: never log query strings, emails in path parameters,

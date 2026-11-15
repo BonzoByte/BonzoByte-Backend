@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { BETA_COOKIE, BETA_SESSION_MS, betaCookieToken } from './betaAccess.js';
 import { betaPage } from './betaPage.js';
 import { privateHeaders } from './accessPolicy.js';
-export function createBetaGate({ access, publicOrigin }) {
+export function createBetaGate({ access, publicOrigin, publicAccess = false }) {
     const router = express.Router();
     router.use((_req, res, next) => { res.set(privateHeaders); next(); });
     router.use((req, res, next) => {
@@ -11,6 +11,22 @@ export function createBetaGate({ access, publicOrigin }) {
             return res.status(403).json({ code: 'BETA_ORIGIN_DENIED' });
         next();
     });
+    if (publicAccess) {
+        // No challenge creation, mail delivery or beta-session DB reads in public mode.
+        router.get('/beta/session', (_req, res) => res.json({ betaAccess: true, siteAccessMode: 'public' }));
+        router.all(['/beta', '/beta/request', '/beta/verify', '/beta/logout'], (req, res) => {
+            if (['GET', 'HEAD'].includes(req.method)) return res.redirect(303, '/');
+            return res.status(410).json({ code: 'BETA_ACCESS_DISABLED' });
+        });
+        router.use((req, res, next) => {
+            // Public viewing never enables development/debug identity or an unconfigured provider.
+            const google = req.method === 'GET' && ['/api/auth/google', '/api/auth/google/callback'].includes(req.path);
+            if (/^\/api\/auth\/(google|facebook|dev|debug)(\/|$)/i.test(req.path) && !google)
+                return res.status(404).json({ code: 'NOT_AVAILABLE' });
+            next();
+        });
+        return router;
+    }
     const publicLimiter = rateLimit({ windowMs: 15 * 60000, max: 40, standardHeaders: true, legacyHeaders: false });
     router.get('/beta', async (req, res) => {
         try { res.type('html').send(betaPage({ authenticated: !!await access.session(betaCookieToken(req.headers.cookie)) })); }
