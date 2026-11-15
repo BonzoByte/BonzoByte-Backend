@@ -31,6 +31,8 @@ import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
 import accountDeletionRoutes from './routes/accountDeletion.routes.js';
 import { initializeAccountDeletion } from './utils/accountDeletionRuntime.js';
+import { createMongoAvatarRouter } from './routes/avatar.routes.js';
+import { mongoAvatarStorage } from './services/avatarStorage/index.js';
 import archivesRoutes from './routes/archives.routes.js';
 import referralsRoutes from './routes/referrals.routes.js';
 import billingRoutes from './routes/billing.routes.js';
@@ -173,7 +175,8 @@ app.get('/robots.txt', (_req, res) => res.set('X-Robots-Tag', 'noindex, nofollow
 app.use('/api/archives', archivesRoutes);
 
 // ✅ uploads (avatar)
-app.use(
+if (mongoAvatarStorage) app.use('/uploads', createMongoAvatarRouter({ storage: mongoAvatarStorage, prefix: env.AVATAR_STORAGE_PREFIX }));
+else app.use(
     '/uploads',
     express.static(path.join(__dirname, 'uploads'), {
         setHeaders: (res) => {

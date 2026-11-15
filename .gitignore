@@ -8,5 +8,10 @@ coverage/
 audit/
 logs/
 uploads/
-test/
+test/*
+!test/mongoAvatarStorage.test.js
+!test/avatarProfile.test.js
+!test/helpers/
+test/helpers/*
+!test/helpers/mongoAvatarFixture.js
 *.log

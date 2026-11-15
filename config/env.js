@@ -24,7 +24,7 @@ const asStringDefault = (defaultValue) => z.preprocess(
 
 const asStorageDriver = z.preprocess(
     (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toLowerCase() : undefined),
-    z.enum(['local', 'r2']).default('local')
+    z.enum(['local', 'r2', 'mongo']).default('local')
 );
 
 const Env = z.object({

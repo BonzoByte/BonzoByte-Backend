@@ -6,7 +6,7 @@ import FavouritePlayer from '../models/favouritePlayer.model.js';
 import FavouriteMatch from '../models/favouriteMatch.model.js';
 import fs from 'fs';
 import sharp from 'sharp';
-import { deleteAvatar, getPublicUrl, saveAvatar } from '../services/avatarStorage/index.js';
+import { deleteAvatar, getPublicUrl, saveAvatar, mongoAvatarStorage } from '../services/avatarStorage/index.js';
 
 function getRequestBaseUrl(req) {
     return `${req.protocol}://${req.get('host')}`;
@@ -60,10 +60,11 @@ export const updateUserProfile = async (req, res) => {
         if (req.file) {
             const version = Date.now();
             const baseUrl = getRequestBaseUrl(req);
+            let avatarBuffer;
 
             // Decode and re-encode uploads so the public avatar is always a small WebP.
             try {
-                const avatarBuffer = await sharp(req.file.path, {
+                avatarBuffer = await sharp(req.file.path, {
                     failOn: 'warning',
                     limitInputPixels: 4096 * 4096,
                 })
@@ -71,27 +72,24 @@ export const updateUserProfile = async (req, res) => {
                     .resize(512, 512, { fit: 'cover' })
                     .webp({ quality: 82 })
                     .toBuffer();
-
-                const savedAvatar = await saveAvatar(avatarBuffer, {
-                    userId: req.user.id,
-                    version,
-                    baseUrl,
-                });
-
-                newAvatarKey = savedAvatar.key;
-                user.avatarKey = newAvatarKey;
-                user.avatarUpdatedAt = new Date(version);
-                // avatarKey is the new source of truth for uploaded avatars; avatarUrl stays for compatibility.
-                user.avatarUrl = savedAvatar.publicUrl;
-                shouldDeleteOldAvatar = Boolean(oldAvatarKey && oldAvatarKey !== newAvatarKey);
             } catch {
                 return res.status(400).json({ message: 'Invalid avatar image.' });
             } finally {
                 try { fs.unlinkSync(req.file.path); } catch { }
             }
+            await saveAvatar(avatarBuffer, { userId: req.user.id, version, baseUrl }, async (savedAvatar, { session } = {}) => {
+                newAvatarKey = savedAvatar.key;
+                user.avatarKey = newAvatarKey;
+                user.avatarUpdatedAt = new Date(version);
+                // Mongo commits this reference and the bounded image together.
+                user.avatarUrl = savedAvatar.publicUrl;
+                await user.save(session ? { session } : undefined);
+            });
+            shouldDeleteOldAvatar = Boolean(oldAvatarKey && oldAvatarKey !== newAvatarKey);
+        } else {
+            await user.save();
         }
 
-        await user.save();
         userSaveCompleted = true;
 
         if (shouldDeleteOldAvatar) {
@@ -123,9 +121,12 @@ export const updateUserProfile = async (req, res) => {
             },
         });
     } catch (err) {
-        if (!userSaveCompleted && newAvatarKey && newAvatarKey !== oldAvatarKey) {
+        if (!mongoAvatarStorage && !userSaveCompleted && newAvatarKey && newAvatarKey !== oldAvatarKey) {
             try { await deleteAvatar(newAvatarKey); } catch { }
         }
+
+        if (err.code === 'AVATAR_INVALID_IMAGE') return res.status(400).json({ message: 'Invalid avatar image.' });
+        if (err.code === 'AVATAR_VERSION_CONFLICT') return res.status(409).json({ message: 'Please retry the avatar update.' });
 
         if (['PRESENCE_INVALID_PRIVACY', 'PRESENCE_VERIFICATION_REQUIRED'].includes(err.code))
             return res.status(err.status).json({ code: err.code, message: 'Invalid online-status preference.' });

@@ -4,12 +4,13 @@ import { PRIVATE_MESSAGE_COLLECTIONS } from '../models/privateMessages.model.js'
 import { erasePrivateMessages } from './privateMessagesCleanup.js';
 import { ARCADE_COLLECTIONS } from './arcade.js';
 import { FANTASY_COLLECTIONS } from './fantasyPolicy.js';
+import { MONGO_AVATAR_COLLECTION } from '../services/avatarStorage/mongoAvatarStorage.js';
 
 export const ACCOUNT_COLLECTIONS = {
     ...ARCADE_COLLECTIONS,
     ...FANTASY_COLLECTIONS,
     ...PRIVATE_MESSAGE_COLLECTIONS,
-    users: 'users', favourites: 'favouriteplayers', matches: 'favouritematches', picks: 'picks', competition: 'competitionpicks',
+    users: 'users', avatars: MONGO_AVATAR_COLLECTION, favourites: 'favouriteplayers', matches: 'favouritematches', picks: 'picks', competition: 'competitionpicks',
     invitations: 'referralinvitations', payments: 'planpayments', events: 'planpaymentevents',
     livePayments: 'livepayments',
     previews: 'sandboxpayments', labPayments: 'billinglabpayments', labEvents: 'billinglabevents',
@@ -40,6 +41,8 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
     }
     async function erase(user, session) {
         const options = { session }, rows = await payments(user, options);
+        // Also erase Mongo images after switching back to another driver.
+        await c('avatars').deleteMany({ _id: String(user._id) }, options);
         const ids = rows.map(p => p._id), orderIds = rows.map(p => p.orderId).filter(Boolean);
         const notifications = await c('mail').find({ payment: { $in: ids } }, options).toArray();
         // No retained payment IDs/digests are treated as anonymous statistics.
