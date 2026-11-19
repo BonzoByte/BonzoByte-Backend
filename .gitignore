@@ -12,6 +12,7 @@ test/*
 !test/mongoAvatarStorage.test.js
 !test/avatarProfile.test.js
 !test/publicSiteAccess.test.js
+!test/recentCatalogueReader.test.js
 !test/helpers/
 test/helpers/*
 !test/helpers/mongoAvatarFixture.js

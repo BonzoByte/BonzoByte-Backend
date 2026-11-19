@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 const decompress = promisify(brotliDecompress);
 const PREFIX = 'publisher-staging-v1/objects/';
 const HEX = /^[a-f0-9]{64}$/;
-const SHARD = /^[a-f0-9]{3}$/;
+// Catalogue density is declared and authenticated by each immutable release.
 const MAX_PAYLOAD = 128 * 1024 * 1024;
 const MAX_METADATA = 8 * 1024 * 1024;
 const safePaths = /^(?:matches\/[1-9][0-9]*\.br|daily\/(?:[0-9]{8}\.br|index\.json|manifest(?:\.tournaments)?\.json)|players\/(?:lite|ts|details|matches)\/[1-9][0-9]*\.br|tournaments\/(?:lite|matches)\/[1-9][0-9]*\.br|players\/indexBuild\/(?:players\.(?:reviewed|rally)\.[a-f0-9]{16}\.br|manifest\.json)|tournaments\/indexBuild\/(?:tournaments\.(?:reviewed|rally)\.[a-f0-9]{16}\.br|manifest\.tournaments\.json)|(?:analytics|model-insights|simulation)\/[A-Za-z0-9._/-]+\.(?:br|json))$/;
@@ -15,7 +15,7 @@ export class ArchiveError extends Error {
 }
 const check = (ok, code = 'ARCHIVE_INTEGRITY') => { if (!ok) throw new ArchiveError(code); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const shardOf = value => hash(String(value)).slice(0, 3);
+const shardOf = (value, width = 3) => hash(String(value)).slice(0, width);
 const own = (obj, key) => Object.hasOwn(obj, key) ? obj[key] : undefined;
 const positive = n => Number.isSafeInteger(n) && n > 0;
 const isoDate = text => typeof text === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(text) &&
@@ -153,10 +153,13 @@ export async function openArchiveRelease({ candidate, getObject, timeoutMs = 150
   const release = parse(await fetchBytes(candidate));
   check(release.schema === 'bonzobyte.online-archive-release.v1' && HEX.test(release.release) &&
     HEX.test(release.inventorySha256) && isoDate(release.through) && positive(release.files) && positive(release.matches) &&
-    release.shardAlgorithm === 'sha256-utf8-first-3-hex' && release.candidateOnly === true && release.activationAllowed === false);
+    ['sha256-utf8-first-3-hex', 'sha256-utf8-first-1-hex'].includes(release.shardAlgorithm) && release.candidateOnly === true && release.activationAllowed === false);
+  const shardWidth = release.shardAlgorithm === 'sha256-utf8-first-1-hex' ? 1 : 3;
+  const releaseShard = value => shardOf(value, shardWidth);
+  const shardPattern = new RegExp(`^[a-f0-9]{${shardWidth}}$`);
   for (const group of [release.catalogues, release.routing?.id, release.routing?.tp]) {
     check(group && typeof group === 'object' && !Array.isArray(group) && Object.keys(group).length <= 4096);
-    for (const [key, d] of Object.entries(group)) { check(SHARD.test(key) && positive(d.rows)); descriptor(d); }
+    for (const [key, d] of Object.entries(group)) { check(shardPattern.test(key) && positive(d.rows)); descriptor(d); }
   }
   check(Object.values(release.catalogues).reduce((n,d) => n + d.rows, 0) === release.files);
   descriptor(release.dailyDates);
@@ -164,7 +167,7 @@ export async function openArchiveRelease({ candidate, getObject, timeoutMs = 150
 
   async function lookup(logical, signal) {
     logicalPath(logical);
-    const shard = shardOf(logical), d = own(release.catalogues, shard);
+    const shard = releaseShard(logical), d = own(release.catalogues, shard);
     if (!d) throw new ArchiveError('ARCHIVE_NOT_FOUND', 404);
     const catalogue = await meta(d, value => {
       check(value.schema === 'bonzobyte.online-catalogue.v1' && value.shard === shard &&
@@ -174,7 +177,7 @@ export async function openArchiveRelease({ candidate, getObject, timeoutMs = 150
         check(Array.isArray(row) && row.length === 5);
         const [path, key, bytes, sha256, jsonSha] = row;
         logicalPath(path);
-        check(path > previous && shardOf(path) === shard && HEX.test(jsonSha)); previous = path;
+        check(path > previous && releaseShard(path) === shard && HEX.test(jsonSha)); previous = path;
         descriptor({key, bytes, sha256, codec:path.endsWith('.br') ? 'br' : 'json'}, MAX_PAYLOAD);
       }
     }, signal);
@@ -198,7 +201,7 @@ export async function openArchiveRelease({ candidate, getObject, timeoutMs = 150
 
   async function locate(kind, value, { signal } = {}) {
     if (!/^[1-9][0-9]*$/.test(String(value)) || !positive(Number(value))) throw new ArchiveError('INVALID_MATCH_ID', 400);
-    const id = Number(value), shard = shardOf(id), d = own(release.routing[kind], shard);
+    const id = Number(value), shard = releaseShard(id), d = own(release.routing[kind], shard);
     if (!d) return null;
     const routing = await meta(d, data => {
       check(data.schema === 'bonzobyte.online-match-routing.v1' && data.kind === kind && data.shard === shard &&
@@ -206,7 +209,7 @@ export async function openArchiveRelease({ candidate, getObject, timeoutMs = 150
       let previous = 0;
       for (const row of data.rows) {
         check(Array.isArray(row) && row.length === 4 && row.slice(0,3).every(positive) && row[0] > previous &&
-          shardOf(row[0]) === shard && isoDate(row[3])); previous = row[0];
+          releaseShard(row[0]) === shard && isoDate(row[3])); previous = row[0];
       }
     }, signal);
     const r = routing.rows.find(r => r[0] === id);

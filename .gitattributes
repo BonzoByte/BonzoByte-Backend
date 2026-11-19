@@ -1,3 +1,4 @@
 # Replay kernels and catalogues are verified by their exact bytes on Linux.
 utils/arcade-engine*/** -text
 data/*.json -text
+utils/private-archive-reader/** -text

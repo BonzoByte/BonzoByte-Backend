@@ -5,9 +5,9 @@ export const PRIVATE_ARCHIVE_ENDPOINT = 'https://6cd78d11a9b52601ce8ffce8f32ae40
 export const PRIVATE_ARCHIVE_BUCKET = 'bb-live-archives';
 const SHA256 = /^[a-f0-9]{64}$/;
 
-// Approved ArchivePublisher source SHA-256s; vendored files are byte-for-byte copies.
+// Approved deployed reader bytes. Reader revision supports both 1-hex and 3-hex catalogues.
 export const PRIVATE_READER_SOURCE_SHA256 = Object.freeze({
-    'reader.mjs': 'ceceefa1c904d1164c6967a86de6ffadb9052434017721c9b1648faadb8df227',
+    'reader.mjs': '0fb30088395142339065250d9d970652cfd7ae19e7f3fc30571c24fcb78f1371',
     's3-transport.mjs': '04047922fcbfd4bd6c85861554c765e68f0b150c09796f4ec00df458c10186a1',
     'archive-handlers.mjs': '507b68f8c2fda60eb4c9896b160dc01cb026d9d5e1c7ba6f05465622c6806c9e',
 });
