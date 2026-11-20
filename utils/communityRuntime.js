@@ -14,5 +14,5 @@ export const community = createCommunity({ connection: mongoose.connection, stor
 export const communityModeration = createCommunityModeration({ connection: mongoose.connection, store, available: () => ready, notify: notificationDelivery });
 export async function initializeCommunity() {
     if (!communityEnabled()) return;
-    try { await store.initialize(); ready = true; } catch { console.warn('[COMMUNITY] unavailable: indexes/transactions required.'); }
+    try { await store.initialize(); await community.initialize(); ready = true; } catch { console.warn('[COMMUNITY] unavailable: indexes/transactions required.'); }
 }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
 import { discussionError, discussionObject, discussionText, discussionPost, discussionFollowingPage, discussionBoolean, discussionThrough, discussionObjectId } from './discussions.js';
-import { COMMUNITY_COLLECTIONS } from '../models/community.model.js';
+import { COMMUNITY_COLLECTIONS, CommunityReaction } from '../models/community.model.js';
 import { DISCUSSION_COLLECTIONS } from '../models/discussion.model.js';
 import { safeDiscussionTitle } from './discussionTitles.js';
 import { communityModerator } from './communityPolicy.js';
@@ -50,6 +50,17 @@ const topicId = (actor, key) => Number.parseInt(createHash('sha256').update(JSON
 export function createCommunity({ connection, store, available = () => true, names = COMMUNITY_COLLECTIONS, matchNames = DISCUSSION_COLLECTIONS }) {
     const c = key => connection.collection(names[key]);
     const check = () => { if (!available()) throw discussionError('UNAVAILABLE'); };
+    async function reactions(comments, actor, session) {
+        const ids = comments.filter(row => !row.deleted && !row.hidden && row.author).map(row => new Types.ObjectId(row.id));
+        const rows = ids.length ? await c('reactions').aggregate([
+            { $match: { commentId: { $in: ids } } },
+            { $lookup: { from: 'users', localField: 'userId', foreignField: '_id', as: 'reactor' } },
+            { $match: { 'reactor.0': { $exists: true }, 'reactor.accountClosure.requestedAt': { $exists: false } } },
+            { $group: { _id: '$commentId', count: { $sum: 1 }, liked: { $max: { $cond: [{ $eq: ['$userId', actor?.user ?? null] }, 1, 0] } } } },
+        ], session ? { session } : options).toArray() : [];
+        const byId = new Map(rows.map(row => [String(row._id), { count: row.count, liked: row.liked === 1 }]));
+        return comments.map(row => ({ ...row, reaction: byId.get(row.id) ?? { count: 0, liked: false } }));
+    }
     const topicDTO = row => ({ id: row._id, title: row.title, category: row.category, language: row.language,
         createdAt: row.createdAt, lastActivityAt: row.lastActivityAt, pinned: row.pinned === true });
     async function topic(id) {
@@ -87,6 +98,12 @@ export function createCommunity({ connection, store, available = () => true, nam
         return { items, hasMore: rows.length > page.limit, nextAfter: rows.length > page.limit ? cursor(items.at(-1), matchFeed) : null };
     }
     return {
+        async initialize() {
+            const indexes = CommunityReaction.schema.indexes().map(([key, settings]) => {
+                const { _autoIndex, ...rest } = settings; return { key, ...rest };
+            });
+            await c('reactions').createIndexes(indexes, { maxTimeMS: 30000, timeoutMS: 30000 });
+        },
         async access(actor) {
             check();
             return store.transact(actor, async (_session, _at, user) => ({ canModerate: communityModerator(user) }), { verified: false, operation: 'community.access' });
@@ -113,13 +130,43 @@ export function createCommunity({ connection, store, available = () => true, nam
             // Fail closed during a legacy local account-erasure handover as well.
             result.comments = result.comments.map(comment => !comment.author && !comment.hidden && !comment.deleted
                 ? { ...comment, body: '', deleted: true, editedAt: undefined, editVersion: undefined } : comment);
-            return { topic: topicDTO(row), ...result };
+            return { topic: topicDTO(row), ...result, comments: await reactions(result.comments, actor) };
         },
-        async post(actor, id, body) { await topic(id); return store.post(actor, id, discussionPost(body), true, null, {
+        async post(actor, id, body) { await topic(id); const result = await store.post(actor, id, discussionPost(body), true, null, {
             beforeInsert: async session => {
                 if (!await c('threads').findOne({ _id: id, removed: false }, { session })) throw discussionError('COMMENT_NOT_FOUND', 404);
             },
-        }); },
+        }); return { ...result, comment: (await reactions([result.comment], actor))[0] }; },
+        async react(actor, id, body) {
+            check(); discussionObjectId(id); const liked = discussionBoolean(body, 'liked');
+            return store.transact(actor, async (session, at) => {
+                const row = await c('comments').findOne({ _id: new Types.ObjectId(id), deleted: false, hidden: false }, { session });
+                if (!row) throw discussionError('COMMENT_NOT_FOUND', 404);
+                const thread = await c('threads').findOne({ _id: row.matchTPId, removed: false, category: { $in: COMMUNITY_CATEGORIES } }, { session });
+                const active = userId => connection.collection('users').findOne({ _id: userId,
+                    'accountClosure.requestedAt': { $exists: false } }, { session, projection: { _id: 1 } });
+                if (!thread || !await active(thread.userId) || !await active(row.userId)) throw discussionError('COMMENT_NOT_FOUND', 404);
+                if (String(row.userId) === String(actor.user)) throw discussionError('FORBIDDEN', 403);
+                const query = { commentId: row._id, userId: actor.user };
+                const previous = await c('reactions').findOne(query, { session });
+                if (!!previous !== liked) {
+                    const spam = await c('spam').findOne({ _id: actor.user }, { session });
+                    const recent = (spam?.reactions ?? []).filter(date => +date > +at - 3600000);
+                    if (recent.length >= 120) {
+                        const until = +recent[0] + 3600000;
+                        throw discussionError('RATE_LIMIT', 429, Math.max(1, Math.ceil((until - +at) / 1000)));
+                    }
+                    await c('spam').updateOne({ _id: actor.user }, { $set: { reactions: [...recent, at] } }, { session, upsert: true });
+                    // Serialize with hide/delete, topic removal and author erasure. No activity/read/follow/notification writes.
+                    await c('comments').updateOne({ _id: row._id }, { $inc: { reactionRevision: 1 } }, { session });
+                    await c('threads').updateOne({ _id: thread._id }, { $inc: { reactionFence: 1 } }, { session });
+                    if (liked) await c('reactions').insertOne({ ...query, authorId: row.userId, matchTPId: row.matchTPId, createdAt: at }, { session });
+                    else await c('reactions').deleteOne(query, { session });
+                }
+                const [result] = await reactions([{ id, author: { id: String(row.userId) } }], actor, session);
+                return { commentId: id, reaction: result.reaction };
+            }, { operation: 'community.react' });
+        },
         async pin(actor, id, body) {
             check(); const pinned = discussionBoolean(body, 'pinned');
             return store.transact(actor, async (session, at) => {
@@ -170,10 +217,13 @@ export function createCommunity({ connection, store, available = () => true, nam
                 const row = await c('threads').findOne({ _id: id }, { session });
                 if (!row || (String(row.userId) !== String(actor.user) && !communityModerator(user))) throw discussionError('FORBIDDEN', 403);
                 await c('threads').updateOne({ _id: id }, { $set: { removed: true, title: '', pinned: false }, $unset: { userId: '', pinnedAt: '' } }, { session });
+                await c('reactions').deleteMany({ matchTPId: id }, { session });
                 return { removed: true };
             });
         },
-        async remove(actor, id) { check(); return store.remove(actor, id); },
+        async remove(actor, id) { check(); return store.remove(actor, id, {
+            afterRemove: (session, row) => c('reactions').deleteMany({ commentId: row._id }, { session }),
+        }); },
         async report(actor, id, body) { check(); discussionObject(body, ['reason']); return store.report(actor, id, body.reason === undefined ? '' : discussionText(body.reason, 500, true)); },
         async hide(actor, id, hidden) { check(); return store.hide(actor, id, hidden); },
         async reports(actor, page) { check(); return store.reports(actor, page); },
@@ -183,6 +233,10 @@ export function createCommunity({ connection, store, available = () => true, nam
 export async function eraseCommunity(connection, userId, session, names = COMMUNITY_COLLECTIONS) {
     const { eraseDiscussions } = await import('./discussionCleanup.js');
     await eraseDiscussions(connection, userId, session, names);
+    // Remove both this account's reactions and reactions on its erased posts/topics.
+    const owned = await connection.collection(names.threads).find({ userId }, { session, projection: { _id: 1 } }).toArray();
+    await connection.collection(names.reactions).deleteMany({ $or: [{ userId }, { authorId: userId },
+        { matchTPId: { $in: owned.map(row => row._id) } }] }, { session });
     await connection.collection(names.threads).updateMany({ userId }, {
         $set: { title: '', removed: true, pinned: false }, $unset: { userId: '', pinnedAt: '' },
     }, { session });

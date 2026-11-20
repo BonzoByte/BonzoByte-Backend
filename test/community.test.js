@@ -36,7 +36,7 @@ test('pagination is bounded and cursor cannot inject a query', () => {
     assert.throws(() => communityPage({ category: 'play' }, true));
 });
 test('community namespace cannot appear in match participation/DM tables', () => {
-    assert.equal(new Set([...Object.values(COMMUNITY_COLLECTIONS), ...Object.values(DISCUSSION_COLLECTIONS)]).size, 10);
+    assert.equal(new Set([...Object.values(COMMUNITY_COLLECTIONS), ...Object.values(DISCUSSION_COLLECTIONS)]).size, 11);
 });
 test('disabled router is closed by default', async () => {
     const app = express(); app.use('/api/community', createCommunityRouter({ service: {} }));

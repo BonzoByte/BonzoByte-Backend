@@ -282,11 +282,12 @@ export function createDiscussionStore({ connection, User, models = [], names = D
         if (!row) throw discussionError('COMMENT_NOT_FOUND', 404);
         return row;
     }
-    async function remove(actor, id) {
+    async function remove(actor, id, extension = {}) {
         return transact(actor, async (session, _at, user) => {
             const row = await target(id, session);
             if (String(row.userId) !== String(actor.user)) throw discussionError('FORBIDDEN', 403);
             await c('comments').updateOne({ _id: row._id }, { $set: { deleted: true, body: '' } }, options(session));
+            if (extension.afterRemove) await extension.afterRemove(session, row);
             return { comment: (await dto([{ ...row, deleted: true, body: '' }], actor, user, session))[0] };
         }, { operation: 'remove' });
     }

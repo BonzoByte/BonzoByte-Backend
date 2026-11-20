@@ -54,6 +54,7 @@ export function createCommunityRouter({ service, moderation, auth = protect, rea
     router.delete('/topics/:id', auth, handle(id, req => service.removeTopic(actor(req), req.topicId)));
     router.delete('/comments/:id', auth, handle(req => discussionObjectId(req.params.id), req => service.remove(actor(req), req.params.id)));
     router.patch('/comments/:id', auth, handle(req => { discussionObjectId(req.params.id); communityEditInput(req.body); }, req => service.edit(actor(req), req.params.id, req.body)));
+    router.put('/comments/:id/reaction', auth, handle(req => { discussionObjectId(req.params.id); discussionBoolean(req.body, 'liked'); }, req => service.react(actor(req), req.params.id, req.body)));
     router.post('/comments/:id/report', auth, handle(req => discussionObjectId(req.params.id), req => service.report(actor(req), req.params.id, req.body)));
     router.post('/comments/:id/hide', auth, handle(req => { discussionObjectId(req.params.id); discussionBoolean(req.body, 'hidden'); }, req => service.hide(actor(req), req.params.id, req.body.hidden)));
     router.get('/reports', auth, handle(req => { req.page = discussionPage(req.query, true); }, req => service.reports(actor(req), req.page), true));
