@@ -5,12 +5,13 @@ import { erasePrivateMessages } from './privateMessagesCleanup.js';
 import { ARCADE_COLLECTIONS } from './arcade.js';
 import { FANTASY_COLLECTIONS } from './fantasyPolicy.js';
 import { MONGO_AVATAR_COLLECTION } from '../services/avatarStorage/mongoAvatarStorage.js';
+import { insightsHash } from './siteInsightsPolicy.js';
 
 export const ACCOUNT_COLLECTIONS = {
     ...ARCADE_COLLECTIONS,
     ...FANTASY_COLLECTIONS,
     ...PRIVATE_MESSAGE_COLLECTIONS,
-    users: 'users', avatars: MONGO_AVATAR_COLLECTION, favourites: 'favouriteplayers', matches: 'favouritematches', picks: 'picks', competition: 'competitionpicks',
+    users: 'users', siteRegistrations: 'siteinsights_registrations', siteVisits: 'siteinsights_visits', avatars: MONGO_AVATAR_COLLECTION, favourites: 'favouriteplayers', matches: 'favouritematches', picks: 'picks', competition: 'competitionpicks',
     invitations: 'referralinvitations', payments: 'planpayments', events: 'planpaymentevents',
     livePayments: 'livepayments',
     previews: 'sandboxpayments', labPayments: 'billinglabpayments', labEvents: 'billinglabevents',
@@ -38,11 +39,25 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
             throw deletionError('DELETION_PAYMENT_REVIEW');
         if (await c('mail').findOne({ payment: { $in: rows.map(p => p._id) }, state: 'sending', leaseUntil: { $gt: at } }))
             throw deletionError('DELETION_WAITING');
+        if (await c('siteRegistrations').findOne({ userId: user._id, emailState: 'sending', leaseUntil: { $gt: at } }))
+            throw deletionError('DELETION_WAITING');
+        if (String(process.env.SITE_INSIGHTS_SECRET || '').length < 32
+            && await c('siteVisits').findOne({ members: { $exists: true, $ne: [] } }))
+            throw deletionError('DELETION_REVIEW_REQUIRED');
     }
     async function erase(user, session) {
         const options = { session }, rows = await payments(user, options);
         // Also erase Mongo images after switching back to another driver.
         await c('avatars').deleteMany({ _id: String(user._id) }, options);
+        // Keep only an unlinked signup count; do not retain the erased account ID or send pending owner mail.
+        await c('siteRegistrations').updateMany({ userId: user._id }, {
+            $unset: { userId: '', lease: '', leaseUntil: '', nextAttemptAt: '' }, $set: { emailState: 'suppressed' },
+        }, options);
+        const insightsSecret = String(process.env.SITE_INSIGHTS_SECRET || '');
+        if (insightsSecret.length >= 32) {
+            const memberHash = insightsHash(insightsSecret, 'member', String(user._id));
+            await c('siteVisits').updateMany({ members: memberHash }, { $pull: { members: memberHash } }, options);
+        }
         const ids = rows.map(p => p._id), orderIds = rows.map(p => p.orderId).filter(Boolean);
         const notifications = await c('mail').find({ payment: { $in: ids } }, options).toArray();
         // No retained payment IDs/digests are treated as anonymous statistics.

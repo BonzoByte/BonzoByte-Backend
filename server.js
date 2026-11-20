@@ -58,6 +58,8 @@ import { createArcadeRouter, arcadeHeaders, arcadeJsonError } from './routes/arc
 import { arcade, initializeArcade } from './utils/arcadeRuntime.js';
 import { createFantasyRouter, fantasyHeaders, fantasyJsonError } from './routes/fantasy.routes.js';
 import { fantasy, fantasyAvailable, initializeFantasy } from './utils/fantasyRuntime.js';
+import { createSiteInsightsRouter } from './routes/siteInsights.routes.js';
+import { siteInsightsStore, insightsConfig, insightsIdentity, insightsAvailable, insightsPurgeAvailable, initializeSiteInsights } from './utils/siteInsightsRuntime.js';
 
 const ARCHIVES_ONLY = String(env.ARCHIVES_ONLY || '').toLowerCase() === 'true';
 
@@ -117,6 +119,7 @@ app.use('/api/private-messages', json({ limit: DISCUSSION_JSON_LIMIT }), private
 app.use('/api/competition', json({ limit: '4kb' }), competitionJsonError);
 app.use('/api/arcade', json({ limit: '900kb' }), arcadeJsonError);
 app.use('/api/fantasy', json({ limit: '8kb' }), fantasyJsonError);
+app.use('/api/site-insights', json({ limit: '2kb' }));
 app.use(json({ limit: '1mb' }));
 app.use(urlencoded({ extended: true }));
 if (billingLabEnabled) {
@@ -221,6 +224,7 @@ if (!ARCHIVES_ONLY) {
     app.use('/api/matches', matchRoutes);
     app.use('/api/auth', authLimiter, authRoutes);
     app.use('/api/users', userRoutes);
+    if (!billingLabEnabled) app.use('/api/site-insights', createSiteInsightsRouter({ store: siteInsightsStore, config: insightsConfig, identity: insightsIdentity, available: insightsAvailable, purgeAvailable: insightsPurgeAvailable }));
     app.use('/api/users/me/deletion', accountDeletionRoutes);
     app.use('/api/referrals', referralsRoutes);
     app.use('/api/billing', billingRoutes);
@@ -272,6 +276,7 @@ if (!ARCHIVES_ONLY) {
     await initializeCompetition();
     await initializeArcade();
     await initializeFantasy();
+    await initializeSiteInsights();
 } else {
     console.log('🔕 ARCHIVES_ONLY mode: skipping DB connect.');
 }

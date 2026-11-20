@@ -13,6 +13,8 @@ test/*
 !test/avatarProfile.test.js
 !test/publicSiteAccess.test.js
 !test/recentCatalogueReader.test.js
+!test/siteInsights.test.js
+!test/siteInsightsMongo.test.js
 !test/helpers/
 test/helpers/*
 !test/helpers/mongoAvatarFixture.js

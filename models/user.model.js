@@ -55,6 +55,8 @@ const userSchema = new mongoose.Schema({
     resetPasswordToken: { type: String, select: false, index: true },
     resetPasswordExpires: { type: Date, index: true },
     tokenVersion: { type: Number, default: 0 },
+    // Server-only observation marker prevents repeated signup notifications after analytics retention expires.
+    siteInsightsRegistrationObservedAt: { type: Date, select: false },
     accountClosure: { type: new mongoose.Schema({ requestedAt: Date, jobId: mongoose.Schema.Types.ObjectId }, { _id: false }), default: undefined },
     accountOperations: { type: [new mongoose.Schema({ id: String, expiresAt: Date }, { _id: false })], default: undefined, select: false },
 
