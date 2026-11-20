@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { discussionError, discussionObject, discussionText, discussionPost, discussionMatchId } from './discussions.js';
+import { discussionError, discussionObject, discussionText, discussionPost, discussionFollowingPage, discussionBoolean, discussionThrough } from './discussions.js';
 import { COMMUNITY_COLLECTIONS } from '../models/community.model.js';
 import { DISCUSSION_COLLECTIONS } from '../models/discussion.model.js';
 import { safeDiscussionTitle } from './discussionTitles.js';
@@ -81,6 +81,9 @@ export function createCommunity({ connection, store, available = () => true, nam
         categories: () => ({ categories: COMMUNITY_CATEGORIES }),
         catalogue: query => catalogue(communityPage(query)),
         matches: query => catalogue(communityPage(query, true), true),
+        following(actor, query) { check(); return store.following(actor, discussionFollowingPage(query)); },
+        async follow(actor, id, body) { const row = await topic(id); return store.follow(actor, id, discussionBoolean(body, 'following'), row.title); },
+        async read(actor, id, body) { await topic(id); return store.read(actor, id, discussionThrough(body)); },
         async create(actor, body) {
             check(); const input = communityTopicInput(body), id = topicId(actor, input.post.clientRequestId);
             const context = [input.title, input.category, input.language];

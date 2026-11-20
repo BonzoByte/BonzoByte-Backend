@@ -76,7 +76,8 @@ export function discussionMinePipeline(userId, names = DISCUSSION_COLLECTIONS, {
 }
 
 export function createDiscussionStore({ connection, User, models = [], names = DISCUSSION_COLLECTIONS, now = () => new Date(),
-    diagnostic = () => {}, clock = discussionMonotonicNow, canModerate = user => user?.isAdmin === true }) {
+    diagnostic = () => {}, clock = discussionMonotonicNow, canModerate = user => user?.isAdmin === true,
+    followingPipeline = discussionFollowingPipeline }) {
     const c = key => connection.collection(names[key]);
     async function initialize() {
         // Native, bounded, additive index creation: never sync/drop/repair rows.
@@ -251,7 +252,7 @@ export function createDiscussionStore({ connection, User, models = [], names = D
     }
     async function following(actor, page = { after: null, limit: 100 }) {
         return transact(actor, async session => {
-            const [result] = await c('states').aggregate(discussionFollowingPipeline(actor.user, names, page), options(session)).toArray();
+            const [result] = await c('states').aggregate(followingPipeline(actor.user, names, page), options(session)).toArray();
             const rows = result?.threads ?? [], threads = rows.slice(0, page.limit).map(row => ({ ...row, title: safeDiscussionTitle(row.title) })),
                 hasMore = rows.length > page.limit;
             return { unreadCount: result?.totals[0]?.unreadCount ?? 0, threads, hasMore,

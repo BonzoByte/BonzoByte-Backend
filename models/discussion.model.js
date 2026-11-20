@@ -25,10 +25,11 @@ const state = new Schema({ userId: objectId, matchTPId: Number, following: Boole
 state.index({ userId: 1, matchTPId: 1 }, { unique: true });
 state.index({ userId: 1, following: 1 });
 const report = new Schema({ userId: objectId, authorId: objectId, commentId: objectId,
-    matchTPId: Number, reason: String, createdAt: Date }, options);
+    matchTPId: Number, reason: String, createdAt: Date, resolved: Boolean, resolvedAt: Date }, options);
 report.index({ userId: 1, commentId: 1 }, { unique: true });
 report.index({ authorId: 1 });
 report.index({ commentId: 1 });
+report.index({ resolved: 1, _id: -1 });
 const spam = new Schema({ _id: objectId, posts: [Date], reports: [Date] }, options);
 
 export const DiscussionComment = model('DiscussionComment', comment, DISCUSSION_COLLECTIONS.comments);

@@ -3,10 +3,11 @@ import rateLimit from 'express-rate-limit';
 import protect from '../middleware/auth.middleware.js';
 import { discussionsHeaders, discussionsJsonError, discussionReadLease } from './discussions.routes.js';
 import { DISCUSSION_JSON_LIMIT } from '../utils/discussionText.js';
-import { discussionMatchId, discussionObjectId, discussionPost, discussionPage, discussionBoolean } from '../utils/discussions.js';
+import { discussionMatchId, discussionObjectId, discussionPost, discussionPage, discussionBoolean, discussionFollowingPage, discussionThrough } from '../utils/discussions.js';
 import { communityTopicInput, communityPage } from '../utils/community.js';
+import { moderationPage, moderationScope } from '../utils/communityModeration.js';
 
-export function createCommunityRouter({ service, auth = protect, readLease = discussionReadLease, enabled = () => false, limits = {} }) {
+export function createCommunityRouter({ service, moderation, auth = protect, readLease = discussionReadLease, enabled = () => false, limits = {} }) {
     const router = express.Router();
     router.use(discussionsHeaders);
     router.use((_req, res, next) => enabled() ? next() : res.status(404).json({ code: 'COMMUNITY_DISABLED' }));
@@ -33,11 +34,22 @@ export function createCommunityRouter({ service, auth = protect, readLease = dis
     router.use((req, res, next) => req.method === 'HEAD' ? res.status(405).end() : next());
     router.get('/access', optionalAuth, handle(() => {}, req => service.access(actor(req))));
     router.get('/categories', handle(() => {}, () => service.categories()));
+    router.get('/following', auth, handle(req => discussionFollowingPage(req.query), req => service.following(actor(req), req.query), true));
+    if (moderation) {
+        router.get('/moderation/summary', auth, handle(() => {}, req => moderation.summary(actor(req))));
+        router.get('/moderation', auth, handle(req => moderationPage(req.query), req => moderation.list(actor(req), req.query), true));
+        router.patch('/moderation/:scope/reports/:id', auth, handle(req => { moderationScope(req.params.scope); discussionObjectId(req.params.id); discussionBoolean(req.body, 'resolved'); },
+            req => moderation.resolve(actor(req), req.params.scope, req.params.id, req.body.resolved)));
+        router.put('/moderation/:scope/comments/:id/hide', auth, handle(req => { moderationScope(req.params.scope); discussionObjectId(req.params.id); discussionBoolean(req.body, 'hidden'); },
+            req => moderation.hide(actor(req), req.params.scope, req.params.id, req.body.hidden)));
+    }
     router.get('/topics', handle(req => communityPage(req.query), req => service.catalogue(req.query), true));
     router.get('/matches', handle(req => communityPage(req.query, true), req => service.matches(req.query), true));
     router.post('/topics', auth, handle(req => communityTopicInput(req.body), req => service.create(actor(req), req.body)));
     router.get('/topics/:id', optionalAuth, handle(req => { id(req); req.page = discussionPage(req.query); }, req => service.page(actor(req), req.topicId, req.page), true));
     router.post('/topics/:id', auth, handle(req => { id(req); discussionPost(req.body); }, req => service.post(actor(req), req.topicId, req.body)));
+    router.put('/topics/:id/follow', auth, handle(req => { id(req); discussionBoolean(req.body, 'following'); }, req => service.follow(actor(req), req.topicId, req.body)));
+    router.put('/topics/:id/read', auth, handle(req => { id(req); discussionThrough(req.body); }, req => service.read(actor(req), req.topicId, req.body)));
     router.delete('/topics/:id', auth, handle(id, req => service.removeTopic(actor(req), req.topicId)));
     router.delete('/comments/:id', auth, handle(req => discussionObjectId(req.params.id), req => service.remove(actor(req), req.params.id)));
     router.post('/comments/:id/report', auth, handle(req => discussionObjectId(req.params.id), req => service.report(actor(req), req.params.id, req.body)));

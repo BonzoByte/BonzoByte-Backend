@@ -45,7 +45,7 @@ import { favourites, initializeFavourites } from './utils/favouritesRuntime.js';
 import { createDiscussionsRouter, discussionsHeaders, discussionsJsonError } from './routes/discussions.routes.js';
 import { discussions, initializeDiscussions } from './utils/discussionRuntime.js';
 import { createCommunityRouter } from './routes/community.routes.js';
-import { community, communityEnabled, initializeCommunity } from './utils/communityRuntime.js';
+import { community, communityModeration, communityEnabled, initializeCommunity } from './utils/communityRuntime.js';
 import { createPrivateMessagesRouter, privateMessagesHeaders, privateMessagesJsonError } from './routes/privateMessages.routes.js';
 import { privateMessages, initializePrivateMessages } from './utils/privateMessagesRuntime.js';
 import { createNotificationsRouter, notificationHeaders, isNotificationRequest } from './routes/notifications.routes.js';
@@ -235,7 +235,7 @@ if (!ARCHIVES_ONLY) {
     app.use('/api/popularity', createPopularityRouter({ service: popularity }));
     app.use('/api/favourites', createFavouritesRouter({ service: favourites }));
     if (!billingLabEnabled) app.use('/api/discussions', createDiscussionsRouter({ service: discussions, notify: notificationDelivery }));
-    if (!billingLabEnabled) app.use('/api/community', createCommunityRouter({ service: community, enabled: communityEnabled }));
+    if (!billingLabEnabled) app.use('/api/community', createCommunityRouter({ service: community, moderation: communityModeration, enabled: communityEnabled }));
     if (!billingLabEnabled) app.use('/api/private-messages', createPrivateMessagesRouter({ service: privateMessages, notify: notificationDelivery }));
     if (!billingLabEnabled) app.use('/api/notifications', createNotificationsRouter({ hub: notifications, available: notificationsAvailable }));
     if (!billingLabEnabled) app.use('/api/presence', createPresenceRouter({ read: readPresence, available: notificationsAvailable }));
