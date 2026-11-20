@@ -6,7 +6,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { communityModels, COMMUNITY_COLLECTIONS as forum } from '../models/community.model.js';
 import { DISCUSSION_COLLECTIONS as match } from '../models/discussion.model.js';
-import { createCommunity } from '../utils/community.js';
+import { createCommunity, communityPage } from '../utils/community.js';
 import { createDiscussionStore } from '../utils/discussionStore.js';
 import { communityFollowingPipeline } from '../utils/communityFollowing.js';
 import { createCommunityModeration, moderationPage, moderationScope } from '../utils/communityModeration.js';
@@ -18,6 +18,14 @@ test('moderation input cannot select private collections or inject a query', () 
     assert.deepEqual(moderationPage({}).source, 'all');
     for (const query of [{ source: 'private' }, { status: { $ne: true } }, { after: 'bad' }, { limit: '999' }]) assert.throws(() => moderationPage(query));
     assert.throws(() => moderationScope('private'));
+});
+test('topic cursors include pin rank while legacy and canonical-match cursors stay compatible', () => {
+    const encoded = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+    assert.equal(communityPage({ after: encoded([1,1700000000000,123]) }).after.pinRank, 1);
+    assert.equal(communityPage({ after: encoded([1700000000000,123]) }).after.pinRank, 0);
+    assert.equal(communityPage({ after: encoded([1700000000000,123]) }, true).after.id, 123);
+    for (const rank of [2,-1,true,'1',null]) assert.throws(() => communityPage({ after: encoded([rank,1700000000000,123]) }));
+    assert.throws(() => communityPage({ after: encoded([1,1700000000000,123]) }, true));
 });
 
 test('real JWT/Mongo: unified public moderation, cursor isolation and canonical forum read/follow rules',
@@ -112,13 +120,57 @@ test('real JWT/Mongo: unified public moderation, cursor isolation and canonical 
             after = queue.data.nextAfter || '';
         } while (after);
         assert.equal(seen.size, 26); assert.ok(seen.has('forum' + collision)); assert.ok(seen.has('match' + collision));
+        // More than one whole page of pins, then mixed legacy-missing/false rows.
+        const seeded = Array.from({ length: 43 }, (_, n) => ({ _id: 100000000000000+n, title: `Pin fixture ${n}`, category: 'equipment', language: 'en',
+            userId: n===42 ? ids[1] : ids[0], removed: false, createdAt: clock, lastActivityAt: new Date(+clock+n*1000), latestSequence: 1,
+            ...(n<22 ? { pinned: true, pinnedAt: clock } : n%2 ? { pinned: false } : {}) }));
+        await connection.collection(forum.threads).insertMany(seeded);
+        await connection.collection(forum.comments).insertMany(seeded.map(row => ({ matchTPId: row._id, sequence: 1, userId: row.userId,
+            body: row.title, createdAt: clock, hidden: false, deleted: false })));
+        const listed=[]; after='';
+        do { const response=await call('/topics?category=equipment'+(after?'&after='+after:''),'GET',undefined,null);
+            assert.equal(response.status,200); listed.push(...response.data.items); after=response.data.nextAfter||'';
+        } while(after);
+        assert.equal(listed.length,43); assert.equal(new Set(listed.map(row=>row.id)).size,43);
+        assert.deepEqual(listed.map(row=>row.id),[...seeded.slice(0,22).reverse(),...seeded.slice(22).reverse()].map(row=>row._id));
+        assert.equal(listed.slice(0,22).every(row=>row.pinned),true);
+        assert.equal(listed.slice(22).every(row=>row.pinned===false),true);
+        const target=seeded[42], targetPath=`/topics/${target._id}/pin`;
+        assert.equal((await call(targetPath,'PUT',{pinned:true},null)).status,401);
+        assert.equal((await call(targetPath,'PUT',{pinned:true},1)).status,403,'even the ordinary topic author cannot pin');
+        assert.equal((await call(targetPath,'PUT',{pinned:true},2)).status,403);
+        assert.equal((await call(targetPath,'PUT',{pinned:'true'})).status,400);
+        assert.equal((await call(targetPath,'PUT',{pinned:true,isAdmin:true})).status,400);
+        assert.equal((await call(targetPath+'?scope=match','PUT',{pinned:true})).status,400);
+        const commentsBefore=await connection.collection(forum.comments).countDocuments({});
+        assert.equal((await call(targetPath,'PUT',{pinned:true})).data.topic.pinned,true);
+        const pinnedRow=await connection.collection(forum.threads).findOne({_id:target._id});
+        clock=new Date(+clock+2000); await call(targetPath,'PUT',{pinned:true});
+        assert.equal(+(await connection.collection(forum.threads).findOne({_id:target._id})).pinnedAt,+pinnedRow.pinnedAt,'repeat pin is idempotent');
+        assert.equal(+pinnedRow.lastActivityAt,+target.lastActivityAt);
+        assert.equal((await call('/topics?category=equipment')).data.items[0].id,target._id);
+        assert.equal((await call(`/topics/${target._id}`,'GET',undefined,null)).data.topic.pinned,true);
+        assert.equal(await connection.collection(forum.comments).countDocuments({}),commentsBefore);
+        assert.equal(await connection.collection(forum.states).countDocuments({matchTPId:target._id}),0,'pinning does not follow or read a topic');
+        assert.equal(notifications.length,1,'pinning emits no match notification');
+        assert.equal((await call(targetPath,'PUT',{pinned:false})).data.topic.pinned,false);
+        const unpinned=await connection.collection(forum.threads).findOne({_id:target._id});
+        assert.equal(unpinned.pinnedAt,undefined); assert.equal(+unpinned.lastActivityAt,+target.lastActivityAt);
+        assert.equal((await call('/topics?category=equipment')).data.items[0].id,seeded[21]._id);
+        assert.equal((await call('/topics/777/pin','PUT',{pinned:true})).status,404,'canonical match feed is not pinnable here');
+        assert.equal((await connection.collection(match.threads).findOne({_id:777})).pinned,undefined);
+        await connection.collection(forum.threads).updateOne({_id:target._id},{$set:{removed:true}});
+        assert.equal((await call(targetPath,'PUT',{pinned:true})).status,404);
         assert.equal((await User.collection.findOne({ _id: ids[0] })).isAdmin, false);
         assert.equal(await connection.collection(match.states).countDocuments({}), 0, 'forum follow/read grants no match participation');
         await User.collection.updateOne({ _id: ids[0] }, { $set: { accountClosure: { requestedAt: clock } } });
         assert.equal((await call('/following', 'GET', undefined, 1)).data.threads.length, 0, 'closed author topics disappear before cleanup');
         assert.equal((await call('/moderation')).status, 401, 'closing accounts immediately lose moderator access');
         await User.collection.updateOne({ _id: ids[0] }, { $unset: { accountClosure: '' } });
+        await call(`/topics/${id}/pin`,'PUT',{pinned:true});
         await call(`/topics/${id}`, 'DELETE');
+        assert.equal((await connection.collection(forum.threads).findOne({_id:id})).pinned,false);
+        assert.equal((await connection.collection(forum.threads).findOne({_id:id})).pinnedAt,undefined);
         assert.equal((await call('/following', 'GET', undefined, 1)).data.threads.length, 0);
         await User.collection.updateOne({ _id: ids[0] }, { $inc: { tokenVersion: 1 } });
         assert.equal((await call('/moderation')).status, 401, 'stale JWT cannot moderate');

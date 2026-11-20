@@ -49,6 +49,7 @@ export function createCommunityRouter({ service, moderation, auth = protect, rea
     router.get('/topics/:id', optionalAuth, handle(req => { id(req); req.page = discussionPage(req.query); }, req => service.page(actor(req), req.topicId, req.page), true));
     router.post('/topics/:id', auth, handle(req => { id(req); discussionPost(req.body); }, req => service.post(actor(req), req.topicId, req.body)));
     router.put('/topics/:id/follow', auth, handle(req => { id(req); discussionBoolean(req.body, 'following'); }, req => service.follow(actor(req), req.topicId, req.body)));
+    router.put('/topics/:id/pin', auth, handle(req => { id(req); discussionBoolean(req.body, 'pinned'); }, req => service.pin(actor(req), req.topicId, req.body)));
     router.put('/topics/:id/read', auth, handle(req => { id(req); discussionThrough(req.body); }, req => service.read(actor(req), req.topicId, req.body)));
     router.delete('/topics/:id', auth, handle(id, req => service.removeTopic(actor(req), req.topicId)));
     router.delete('/comments/:id', auth, handle(req => discussionObjectId(req.params.id), req => service.remove(actor(req), req.params.id)));

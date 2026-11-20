@@ -24,24 +24,28 @@ export function communityPage(query = {}, matchFeed = false) {
     if (query.after) {
         try {
             const row = JSON.parse(Buffer.from(query.after, 'base64url').toString());
-            if (!Array.isArray(row) || row.length !== 2 || !Number.isSafeInteger(row[0]) || row[0] < 0
-                || !Number.isSafeInteger(row[1]) || row[1] <= 0 || !Number.isFinite(+new Date(row[0]))
+            if (!Array.isArray(row) || !(matchFeed ? row.length === 2 : [2,3].includes(row.length))) fail();
+            const offset = row.length === 3 ? 1 : 0;
+            if ((offset && ![0,1].includes(row[0])) || !Number.isSafeInteger(row[offset]) || row[offset] < 0
+                || !Number.isSafeInteger(row[offset+1]) || row[offset+1] <= 0 || !Number.isFinite(+new Date(row[offset]))
                 || Buffer.from(JSON.stringify(row)).toString('base64url') !== query.after) fail();
-            after = { at: new Date(row[0]), id: row[1] };
+            after = { at: new Date(row[offset]), id: row[offset+1], ...(!matchFeed ? { pinRank: offset ? row[0] : 0 } : {}) };
         } catch { fail(); }
     }
     return { category: query.category, after, limit: 20 };
 }
-const cursor = row => Buffer.from(JSON.stringify([+new Date(row.lastActivityAt), row.id])).toString('base64url');
+const cursor = (row, matchFeed) => Buffer.from(JSON.stringify([...(matchFeed ? [] : [row.pinned === true ? 1 : 0]), +new Date(row.lastActivityAt), row.id])).toString('base64url');
 const cursorFilter = after => after ? { $or: [{ lastActivityAt: { $lt: after.at } },
     { lastActivityAt: after.at, _id: { $lt: after.id } }] } : {};
+const topicCursorFilter = after => after ? { $or: [{ pinRank: { $lt: after.pinRank } },
+    { pinRank: after.pinRank, ...cursorFilter(after) }] } : {};
 const topicId = (actor, key) => Number.parseInt(createHash('sha256').update(JSON.stringify([String(actor.user), key])).digest('hex').slice(0, 12), 16) || 1;
 
 export function createCommunity({ connection, store, available = () => true, names = COMMUNITY_COLLECTIONS, matchNames = DISCUSSION_COLLECTIONS }) {
     const c = key => connection.collection(names[key]);
     const check = () => { if (!available()) throw discussionError('UNAVAILABLE'); };
     const topicDTO = row => ({ id: row._id, title: row.title, category: row.category, language: row.language,
-        createdAt: row.createdAt, lastActivityAt: row.lastActivityAt });
+        createdAt: row.createdAt, lastActivityAt: row.lastActivityAt, pinned: row.pinned === true });
     async function topic(id) {
         check();
         const row = await c('threads').findOne({ _id: id, category: { $in: COMMUNITY_CATEGORIES }, removed: false }, options);
@@ -55,8 +59,11 @@ export function createCommunity({ connection, store, available = () => true, nam
         const collections = matchFeed ? matchNames : names;
         const rows = await connection.collection(collections.threads).aggregate([
             { $match: { ...(matchFeed ? { _id: { $gt: 0 } } : { category: page.category || { $in: COMMUNITY_CATEGORIES }, removed: false }),
-                lastActivityAt: { $type: 'date' }, ...cursorFilter(page.after) } },
-            { $sort: { lastActivityAt: -1, _id: -1 } },
+                lastActivityAt: { $type: 'date' } } },
+            // Legacy rows without a pinned field sort exactly like explicit false.
+            ...(!matchFeed ? [{ $set: { pinRank: { $cond: [{ $eq: ['$pinned', true] }, 1, 0] } } }] : []),
+            { $match: matchFeed ? cursorFilter(page.after) : topicCursorFilter(page.after) },
+            { $sort: { ...(!matchFeed ? { pinRank: -1 } : {}), lastActivityAt: -1, _id: -1 } },
             ...(!matchFeed ? [{ $lookup: { from: 'users', let: { author: '$userId' }, pipeline: [
                 { $match: { $expr: { $eq: ['$_id', '$$author'] }, 'accountClosure.requestedAt': { $exists: false } } },
                 { $project: { _id: 1 } },
@@ -66,12 +73,12 @@ export function createCommunity({ connection, store, available = () => true, nam
             ], as: 'visible' } },
             { $match: { 'visible.0.count': { $gt: 0 } } }, { $limit: page.limit + 1 },
             { $project: { _id: 1, title: 1, category: 1, language: 1, createdAt: 1, lastActivityAt: 1,
-                commentCount: { $arrayElemAt: ['$visible.count', 0] } } },
+                pinned: 1, commentCount: { $arrayElemAt: ['$visible.count', 0] } } },
         ], options).toArray();
         const items = rows.slice(0, page.limit).map(row => matchFeed
             ? { id: row._id, title: safeDiscussionTitle(row.title), commentCount: row.commentCount, lastActivityAt: row.lastActivityAt }
             : { ...topicDTO(row), commentCount: row.commentCount });
-        return { items, hasMore: rows.length > page.limit, nextAfter: rows.length > page.limit ? cursor(items.at(-1)) : null };
+        return { items, hasMore: rows.length > page.limit, nextAfter: rows.length > page.limit ? cursor(items.at(-1), matchFeed) : null };
     }
     return {
         async access(actor) {
@@ -91,7 +98,7 @@ export function createCommunity({ connection, store, available = () => true, nam
                 beforeInsert: async (session, at) => {
                     if (await c('threads').findOne({ _id: id }, { session })) throw discussionError('IDEMPOTENCY_CONFLICT', 409);
                     await c('threads').insertOne({ _id: id, title: input.title, category: input.category, language: input.language,
-                        userId: actor.user, createdAt: at, lastActivityAt: at, latestSequence: 0, removed: false }, { session });
+                        userId: actor.user, createdAt: at, lastActivityAt: at, latestSequence: 0, removed: false, pinned: false }, { session });
                 } });
             return { topic: topicDTO(await topic(id)) };
         },
@@ -107,12 +114,25 @@ export function createCommunity({ connection, store, available = () => true, nam
                 if (!await c('threads').findOne({ _id: id, removed: false }, { session })) throw discussionError('COMMENT_NOT_FOUND', 404);
             },
         }); },
+        async pin(actor, id, body) {
+            check(); const pinned = discussionBoolean(body, 'pinned');
+            return store.transact(actor, async (session, at) => {
+                const row = await c('threads').findOne({ _id: id, category: { $in: COMMUNITY_CATEGORIES }, removed: false }, { session });
+                if (!row || !await connection.collection('users').findOne({ _id: row.userId, 'accountClosure.requestedAt': { $exists: false } },
+                    { session, projection: { _id: 1 } })) throw discussionError('COMMENT_NOT_FOUND', 404);
+                if ((row.pinned === true) !== pinned) await c('threads').updateOne({ _id: id }, pinned
+                    ? { $set: { pinned: true, pinnedAt: at } }
+                    : { $set: { pinned: false }, $unset: { pinnedAt: '' } }, { session });
+                // Editorial metadata only: no comment, activity time, read state or notification is written.
+                return { topic: topicDTO({ ...row, pinned }) };
+            }, { admin: true, operation: 'community.pin' });
+        },
         async removeTopic(actor, id) {
             check();
             return store.transact(actor, async (session, _at, user) => {
                 const row = await c('threads').findOne({ _id: id }, { session });
                 if (!row || (String(row.userId) !== String(actor.user) && !communityModerator(user))) throw discussionError('FORBIDDEN', 403);
-                await c('threads').updateOne({ _id: id }, { $set: { removed: true, title: '' }, $unset: { userId: '' } }, { session });
+                await c('threads').updateOne({ _id: id }, { $set: { removed: true, title: '', pinned: false }, $unset: { userId: '', pinnedAt: '' } }, { session });
                 return { removed: true };
             });
         },
@@ -127,7 +147,7 @@ export async function eraseCommunity(connection, userId, session, names = COMMUN
     const { eraseDiscussions } = await import('./discussionCleanup.js');
     await eraseDiscussions(connection, userId, session, names);
     await connection.collection(names.threads).updateMany({ userId }, {
-        $set: { title: '', removed: true }, $unset: { userId: '' },
+        $set: { title: '', removed: true, pinned: false }, $unset: { userId: '', pinnedAt: '' },
     }, { session });
 }
 

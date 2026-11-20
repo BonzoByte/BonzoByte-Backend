@@ -7,7 +7,8 @@ export const COMMUNITY_COLLECTIONS = Object.freeze({ comments: 'communitycomment
 export const communityModels = discussionModels.map((source, index) => {
     const schema = source.schema.clone();
     if (index === 1) {
-        schema.add({ category: String, language: String, userId: Schema.Types.ObjectId, createdAt: Date, removed: Boolean });
+        schema.add({ category: String, language: String, userId: Schema.Types.ObjectId, createdAt: Date, removed: Boolean,
+            pinned: Boolean, pinnedAt: Date });
         schema.index({ category: 1, removed: 1, lastActivityAt: -1, _id: -1 });
         schema.index({ userId: 1 });
     }
