@@ -6,6 +6,7 @@ import { ARCADE_COLLECTIONS } from './arcade.js';
 import { FANTASY_COLLECTIONS } from './fantasyPolicy.js';
 import { MONGO_AVATAR_COLLECTION } from '../services/avatarStorage/mongoAvatarStorage.js';
 import { insightsHash } from './siteInsightsPolicy.js';
+import { eraseCommunity } from './community.js';
 
 export const ACCOUNT_COLLECTIONS = {
     ...ARCADE_COLLECTIONS,
@@ -67,6 +68,7 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
             reports: names.discussionReports, spam: names.discussionSpam,
         });
         await erasePrivateMessages(connection, user._id, session, names);
+        await eraseCommunity(connection, user._id, session);
         const invitations = await c('invitations').find({ $or: [{ sender: user._id }, { recipientEmail: user.email }] }, options).toArray();
         const invitationIds = invitations.map(i => i._id);
         await c('invitations').deleteMany({ _id: { $in: invitationIds } }, options);

@@ -44,6 +44,8 @@ import { createFavouritesRouter, favouritesPrivateResponse, favouritesJsonError 
 import { favourites, initializeFavourites } from './utils/favouritesRuntime.js';
 import { createDiscussionsRouter, discussionsHeaders, discussionsJsonError } from './routes/discussions.routes.js';
 import { discussions, initializeDiscussions } from './utils/discussionRuntime.js';
+import { createCommunityRouter } from './routes/community.routes.js';
+import { community, communityEnabled, initializeCommunity } from './utils/communityRuntime.js';
 import { createPrivateMessagesRouter, privateMessagesHeaders, privateMessagesJsonError } from './routes/privateMessages.routes.js';
 import { privateMessages, initializePrivateMessages } from './utils/privateMessagesRuntime.js';
 import { createNotificationsRouter, notificationHeaders, isNotificationRequest } from './routes/notifications.routes.js';
@@ -81,6 +83,7 @@ if (betaEnabled) app.use(forcePrivateHeaders);
 // Even CORS preflight/rejection responses on this private API must not be cached.
 app.use('/api/favourites', favouritesPrivateResponse);
 app.use('/api/discussions', discussionsHeaders);
+app.use('/api/community', discussionsHeaders);
 app.use('/api/private-messages', privateMessagesHeaders);
 app.use('/api/notifications', notificationHeaders);
 app.use('/api/competition', competitionHeaders);
@@ -115,6 +118,7 @@ app.post('/api/billing/paypal/webhook', rateLimit({ windowMs: 60_000, max: 100 }
 // including malformed/oversized favourites requests and their error responses.
 app.use('/api/favourites', json({ limit: '8kb' }), favouritesJsonError);
 app.use('/api/discussions', json({ limit: DISCUSSION_JSON_LIMIT }), discussionsJsonError);
+app.use('/api/community', json({ limit: DISCUSSION_JSON_LIMIT }), discussionsJsonError);
 app.use('/api/private-messages', json({ limit: DISCUSSION_JSON_LIMIT }), privateMessagesJsonError);
 app.use('/api/competition', json({ limit: '4kb' }), competitionJsonError);
 app.use('/api/arcade', json({ limit: '900kb' }), arcadeJsonError);
@@ -231,6 +235,7 @@ if (!ARCHIVES_ONLY) {
     app.use('/api/popularity', createPopularityRouter({ service: popularity }));
     app.use('/api/favourites', createFavouritesRouter({ service: favourites }));
     if (!billingLabEnabled) app.use('/api/discussions', createDiscussionsRouter({ service: discussions, notify: notificationDelivery }));
+    if (!billingLabEnabled) app.use('/api/community', createCommunityRouter({ service: community, enabled: communityEnabled }));
     if (!billingLabEnabled) app.use('/api/private-messages', createPrivateMessagesRouter({ service: privateMessages, notify: notificationDelivery }));
     if (!billingLabEnabled) app.use('/api/notifications', createNotificationsRouter({ hub: notifications, available: notificationsAvailable }));
     if (!billingLabEnabled) app.use('/api/presence', createPresenceRouter({ read: readPresence, available: notificationsAvailable }));
@@ -269,6 +274,7 @@ if (!ARCHIVES_ONLY) {
     await initializeBillingLab();
     await initializePlanBilling();
     await initializeDiscussions();
+    await initializeCommunity();
     await initializePrivateMessages();
     await initializeAccountDeletion();
     await initializePopularity();

@@ -96,8 +96,8 @@ export function discussionMinePage(query = {}) {
         return { after: { lastCommentAt: new Date(row[0]), matchTPId: row[1] }, limit };
     } catch { invalid('QUERY'); }
 }
-export const discussionHash = (matchTPId, input) => createHash('sha256')
-    .update(JSON.stringify([matchTPId, input.body, input.replyToId])).digest('hex');
+export const discussionHash = (matchTPId, input, context) => createHash('sha256')
+    .update(JSON.stringify([matchTPId, input.body, input.replyToId, ...(context ? [context] : [])])).digest('hex');
 
 export function discussionProfile(user) {
     if (!user || user.accountClosure?.requestedAt) return null;

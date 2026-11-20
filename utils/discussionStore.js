@@ -76,7 +76,7 @@ export function discussionMinePipeline(userId, names = DISCUSSION_COLLECTIONS, {
 }
 
 export function createDiscussionStore({ connection, User, models = [], names = DISCUSSION_COLLECTIONS, now = () => new Date(),
-    diagnostic = () => {}, clock = discussionMonotonicNow }) {
+    diagnostic = () => {}, clock = discussionMonotonicNow, canModerate = user => user?.isAdmin === true }) {
     const c = key => connection.collection(names[key]);
     async function initialize() {
         // Native, bounded, additive index creation: never sync/drop/repair rows.
@@ -104,10 +104,10 @@ export function createDiscussionStore({ connection, User, models = [], names = D
                             { $set: { 'accountOperations.$.expiresAt': new Date(+at + 120000) },
                                 $inc: { 'accountOperations.$.discussionWrites': 1 } }, { ...options(session),
                                 returnDocument: 'after', includeResultMetadata: false,
-                                projection: { ...profileProjection, isAdmin: 1, isVerified: 1 } });
+                                projection: { ...profileProjection, email: 1, isAdmin: 1, isVerified: 1 } });
                             if (!user) throw discussionError('AUTH_REQUIRED', 401);
                             if (verified && user.isVerified !== true) throw discussionError('VERIFICATION_REQUIRED', 403);
-                            if (admin && user.isAdmin !== true) throw discussionError('ADMIN_REQUIRED', 403);
+                            if (admin && !canModerate(user)) throw discussionError('ADMIN_REQUIRED', 403);
                         } else if (verified || admin) throw discussionError('AUTH_REQUIRED', 401);
                         return fn(session, at, user);
                     }, { ...transactionOptions, timeoutMS });
@@ -144,7 +144,7 @@ export function createDiscussionStore({ connection, User, models = [], names = D
         const profileMap = new Map(profiles.map(profile => [String(profile._id), discussionProfile(profile)]));
         const parentMap = new Map(parents.map(parent => [String(parent._id), parent]));
         return rows.map(row => discussionDTO(row, profileMap, parentMap, user?.isVerified === true ? actor : null,
-            user?.isAdmin === true && user?.isVerified === true));
+            canModerate(user) && user?.isVerified === true));
     }
     async function metadata(matchTPId, state, session, knownThread) {
         const thread = knownThread ?? await c('threads').findOne({ _id: matchTPId }, options(session));
@@ -183,9 +183,9 @@ export function createDiscussionStore({ connection, User, models = [], names = D
                 hasMore: rows.length > limit, nextAfter: comments.at(-1)?.sequence ?? after };
         }, { verified: false, operation: 'list' });
     }
-    async function post(actor, matchTPId, input, matchExists, trustedTitle = null) {
+    async function post(actor, matchTPId, input, matchExists, trustedTitle = null, extension = {}) {
         return transact(actor, async (session, at, user) => {
-            const requestHash = discussionHash(matchTPId, input);
+            const requestHash = discussionHash(matchTPId, input, extension.hashContext);
             const previous = await c('comments').findOne({ userId: actor.user, clientRequestId: input.clientRequestId }, options(session));
             if (previous) {
                 if (previous.requestHash !== requestHash) throw discussionError('IDEMPOTENCY_CONFLICT', 409);
@@ -199,6 +199,9 @@ export function createDiscussionStore({ connection, User, models = [], names = D
                 if (!parent || parent.replyToId) throw discussionError('INVALID_REPLY', 400);
             }
             await consume(actor, 'posts', at, session);
+            // Optional internal metadata shares the comment's transaction and replay key.
+            // No caller-supplied callbacks or metadata enter through HTTP routes.
+            if (extension.beforeInsert) await extension.beforeInsert(session, at, user);
             const title = safeDiscussionTitle(trustedTitle);
             const thread = await c('threads').findOneAndUpdate({ _id: matchTPId },
                 { $inc: { latestSequence: 1 }, $set: { lastActivityAt: at, ...(title ? { title } : {}) } }, { ...options(session), upsert: true,
@@ -318,5 +321,5 @@ export function createDiscussionStore({ connection, User, models = [], names = D
             hasMore: rows.length > limit, nextAfter: page.length ? String(page.at(-1)._id) : after };
         }, { verified: false, admin: true, operation: 'reports' });
     }
-    return { initialize, getThread, hasThread, list, post, counts, follow, read, following, mine, remove, report, hide, reports };
+    return { initialize, getThread, hasThread, list, post, counts, follow, read, following, mine, remove, report, hide, reports, transact };
 }
