@@ -121,8 +121,10 @@ export function discussionDTO(row, profiles, parents, actor, admin = false) {
     return { id: String(row._id), sequence: row.sequence,
         author: removed ? null : (profiles.get(String(row.userId)) ?? null),
         body: removed ? '' : row.body, createdAt: row.createdAt,
+        ...(!removed && row.editedAt ? { editedAt: row.editedAt, editVersion: row.editVersion ?? 0 } : {}),
         replyTo: row.replyToId ? { id: String(row.replyToId), authorName: parentProfile?.nickname ?? null,
-            body: parentVisible && parentProfile && discussionLengthValid(parent.body) ? parent.body : null } : null,
+            body: parentVisible && parentProfile && discussionLengthValid(parent.body) ? parent.body : null,
+            ...(parentVisible && parentProfile && parent.editedAt ? { editedAt: parent.editedAt } : {}) } : null,
         deleted: row.deleted === true, hidden: row.hidden === true,
         canDelete: !row.deleted && !!actor?.user && String(row.userId) === String(actor.user),
         canHide: admin && !row.deleted };

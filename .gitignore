@@ -18,6 +18,7 @@ test/*
 !test/siteInsightsMongo.test.js
 !test/community.test.js
 !test/communityHub.test.js
+!test/communityEdits.test.js
 !test/helpers/
 test/helpers/*
 !test/helpers/mongoAvatarFixture.js

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { discussionError, discussionObject, discussionText, discussionPost, discussionFollowingPage, discussionBoolean, discussionThrough } from './discussions.js';
+import { Types } from 'mongoose';
+import { discussionError, discussionObject, discussionText, discussionPost, discussionFollowingPage, discussionBoolean, discussionThrough, discussionObjectId } from './discussions.js';
 import { COMMUNITY_COLLECTIONS } from '../models/community.model.js';
 import { DISCUSSION_COLLECTIONS } from '../models/discussion.model.js';
 import { safeDiscussionTitle } from './discussionTitles.js';
@@ -15,6 +16,11 @@ export function communityTopicInput(body) {
     if (title.length > 160 || /[\r\n]/.test(title)) fail();
     return { title, category: body.category, language: body.language,
         post: discussionPost({ body: body.body, clientRequestId: body.clientRequestId }) };
+}
+export function communityEditInput(body) {
+    discussionObject(body, ['body','version'], ['body','version']);
+    if (!Number.isSafeInteger(body.version) || body.version < 0 || body.version > 1000000000) fail();
+    return { body: discussionText(body.body), version: body.version };
 }
 export function communityPage(query = {}, matchFeed = false) {
     if (Object.keys(query).some(key => !(matchFeed ? ['after'] : ['after', 'category']).includes(key))) fail();
@@ -106,7 +112,7 @@ export function createCommunity({ connection, store, available = () => true, nam
             const row = await topic(id), result = await store.list(actor, id, page);
             // Fail closed during a legacy local account-erasure handover as well.
             result.comments = result.comments.map(comment => !comment.author && !comment.hidden && !comment.deleted
-                ? { ...comment, body: '', deleted: true } : comment);
+                ? { ...comment, body: '', deleted: true, editedAt: undefined, editVersion: undefined } : comment);
             return { topic: topicDTO(row), ...result };
         },
         async post(actor, id, body) { await topic(id); return store.post(actor, id, discussionPost(body), true, null, {
@@ -126,6 +132,37 @@ export function createCommunity({ connection, store, available = () => true, nam
                 // Editorial metadata only: no comment, activity time, read state or notification is written.
                 return { topic: topicDTO({ ...row, pinned }) };
             }, { admin: true, operation: 'community.pin' });
+        },
+        async edit(actor, id, body) {
+            check(); discussionObjectId(id); const input = communityEditInput(body);
+            return store.transact(actor, async (session, at) => {
+                const row = await c('comments').findOne({ _id: new Types.ObjectId(id) }, { session });
+                if (!row) throw discussionError('COMMENT_NOT_FOUND', 404);
+                // Ownership is mandatory even for administrators/moderators.
+                if (String(row.userId) !== String(actor.user)) throw discussionError('FORBIDDEN', 403);
+                if (row.deleted || row.hidden) throw discussionError('COMMENT_NOT_FOUND', 404);
+                const thread = await c('threads').findOne({ _id: row.matchTPId, removed: false, category: { $in: COMMUNITY_CATEGORIES } }, { session });
+                if (!thread || !await connection.collection('users').findOne({ _id: thread.userId, 'accountClosure.requestedAt': { $exists: false } },
+                    { session, projection: { _id: 1 } })) throw discussionError('COMMENT_NOT_FOUND', 404);
+                const version = row.editVersion ?? 0;
+                const response = () => ({ comment: { id, threadId: row.matchTPId, body: row.body, editedAt: row.editedAt ?? null, editVersion: version } });
+                // Retry after a lost response confirms the same revision, never rewrites it.
+                if (version === input.version+1 && row.body === input.body) return response();
+                if (version !== input.version) throw discussionError('EDIT_CONFLICT', 409);
+                if (row.body === input.body) return response();
+                const spam = await c('spam').findOne({ _id: actor.user }, { session });
+                const recent = (spam?.edits ?? []).filter(date => +date > +at-3600000), last = recent.at(-1);
+                if (recent.length >= 30 || (last && +at-+last < 5000)) {
+                    const until = recent.length >= 30 ? +recent[0]+3600000 : +last+5000;
+                    throw discussionError('RATE_LIMIT', 429, Math.max(1, Math.ceil((until-+at)/1000)));
+                }
+                await c('spam').updateOne({ _id: actor.user }, { $set: { edits: [...recent,at] } }, { session, upsert: true });
+                // Share a write fence with topic removal/account erasure. No activity,
+                // sequence, following, fetched/read watermark or notification changes.
+                await c('threads').updateOne({ _id: thread._id }, { $inc: { editFence: 1 } }, { session });
+                await c('comments').updateOne({ _id: row._id }, { $set: { body: input.body, editedAt: at, editVersion: version+1 } }, { session });
+                return { comment: { id, threadId: row.matchTPId, body: input.body, editedAt: at, editVersion: version+1 } };
+            }, { operation: 'community.edit' });
         },
         async removeTopic(actor, id) {
             check();

@@ -4,7 +4,7 @@ import protect from '../middleware/auth.middleware.js';
 import { discussionsHeaders, discussionsJsonError, discussionReadLease } from './discussions.routes.js';
 import { DISCUSSION_JSON_LIMIT } from '../utils/discussionText.js';
 import { discussionMatchId, discussionObjectId, discussionPost, discussionPage, discussionBoolean, discussionFollowingPage, discussionThrough } from '../utils/discussions.js';
-import { communityTopicInput, communityPage } from '../utils/community.js';
+import { communityTopicInput, communityPage, communityEditInput } from '../utils/community.js';
 import { moderationPage, moderationScope } from '../utils/communityModeration.js';
 
 export function createCommunityRouter({ service, moderation, auth = protect, readLease = discussionReadLease, enabled = () => false, limits = {} }) {
@@ -53,6 +53,7 @@ export function createCommunityRouter({ service, moderation, auth = protect, rea
     router.put('/topics/:id/read', auth, handle(req => { id(req); discussionThrough(req.body); }, req => service.read(actor(req), req.topicId, req.body)));
     router.delete('/topics/:id', auth, handle(id, req => service.removeTopic(actor(req), req.topicId)));
     router.delete('/comments/:id', auth, handle(req => discussionObjectId(req.params.id), req => service.remove(actor(req), req.params.id)));
+    router.patch('/comments/:id', auth, handle(req => { discussionObjectId(req.params.id); communityEditInput(req.body); }, req => service.edit(actor(req), req.params.id, req.body)));
     router.post('/comments/:id/report', auth, handle(req => discussionObjectId(req.params.id), req => service.report(actor(req), req.params.id, req.body)));
     router.post('/comments/:id/hide', auth, handle(req => { discussionObjectId(req.params.id); discussionBoolean(req.body, 'hidden'); }, req => service.hide(actor(req), req.params.id, req.body.hidden)));
     router.get('/reports', auth, handle(req => { req.page = discussionPage(req.query, true); }, req => service.reports(actor(req), req.page), true));
