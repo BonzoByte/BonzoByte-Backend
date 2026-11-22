@@ -9,7 +9,7 @@ export function buildDetailsLockedResponse(accessDecision) {
         status: 'error',
         code: 'DETAILS_LOCKED',
         reason: accessDecision?.reason || 'invalid-start',
-        lockHours: accessDecision?.lockHours ?? 1,
+        lockHours: accessDecision?.lockHours ?? 2,
         expectedStartUtc,
         unlocksAt,
         message,

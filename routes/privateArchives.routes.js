@@ -4,6 +4,8 @@ import { createArchiveHandlers } from '../utils/private-archive-reader/archive-h
 import { privateArchiveRuntime } from '../utils/privateArchiveRuntime.js';
 import { projectPublicDailyMatch } from '../utils/publicDailyMatch.js';
 import { parseSimulationArchiveName } from '../utils/simulationArchiveManifest.js';
+import { resolveDetailsSchedule as hostDetailsSchedule } from '../utils/plannedDetailsSchedule.js';
+import { recentForecastKey, overlayPublicPrematchForecasts } from '../utils/publicPrematchForecast.js';
 
 const PRIVATE = 'private, no-store';
 const missing = () => new ArchiveError('ARCHIVE_NOT_FOUND', 404);
@@ -42,6 +44,7 @@ async function hostAccessPolicies() {
 /** Mount at /api/archives only for publisher mode, behind the host's beta gate. */
 export function createPrivateArchivesRouter({ runtime = privateArchiveRuntime, reader,
     optionalAuth = hostOptionalAuth, loadAccessPolicies = hostAccessPolicies,
+    resolveDetailsSchedule = reader ? undefined : hostDetailsSchedule,
     settings = process.env, onError = () => {} } = {}) {
     const router = Router();
     const getReader = reader ? async () => reader : runtime.getReader;
@@ -90,17 +93,28 @@ export function createPrivateArchivesRouter({ runtime = privateArchiveRuntime, r
         const date = dailyDate(req.params.date);
         const rows = await archive.readJson(`daily/${date}.br`);
         if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw integrity();
-        const matches = rows.map(projectPublicDailyMatch);
+        let matches = rows.map(projectPublicDailyMatch);
+        const forecastKey = recentForecastKey(date);
+        if (forecastKey) {
+            try {
+                const batch = await archive.readJson(forecastKey, {maxBytes: 64 * 1024});
+                matches = overlayPublicPrematchForecasts(matches, batch, date);
+            } catch (error) {
+                // An optional model-only batch may not be published for this day.
+                // Corruption is recorded but must not hide existing verified scores.
+                if (!(error instanceof ArchiveError && error.status === 404 && error.code === 'ARCHIVE_NOT_FOUND')) reportError(error);
+            }
+        }
         return res.json({ date, count: matches.length, matches });
     }));
 
     const details = route(async (req, res, archive) => {
         req.params.id = identifier(req.params.id, 5);
         const policies = await loadAccessPolicies();
-        const lockHours = Number(settings.DETAILS_LOCK_HOURS ?? 1);
+        const lockHours = policies.DEFAULT_DETAILS_LOCK_HOURS ?? 2;
         if (!Number.isInteger(lockHours) || lockHours < 0 || lockHours > 24) throw integrity();
         // Keep host access/lock semantics; beta overrides even universally unlocked caching.
-        const handlers = createArchiveHandlers({ ...policies, reader: archive, lockHours, onError: reportError,
+        const handlers = createArchiveHandlers({ ...policies, reader: archive, lockHours, resolveDetailsSchedule, onError: reportError,
             getDetailsCachePolicy: access => ({ ...policies.getDetailsCachePolicy(access), cacheControl: PRIVATE }),
             buildDetailsLockedResponse: access => {
                 res.set('X-BB-Guard', '1');

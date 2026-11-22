@@ -1,21 +1,20 @@
 const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
 const MILLISECONDS_PER_DAY = 24 * MILLISECONDS_PER_HOUR;
 
-export const DEFAULT_DETAILS_LOCK_HOURS = 1;
+export const DEFAULT_DETAILS_LOCK_HOURS = 2;
 
 /**
  * Evaluates the match-details access window without touching a database.
  *
- * Legacy archives encode an unavailable source time as midnight. Because a
- * real midnight start cannot currently be distinguished from that fallback,
- * every midnight value is treated conservatively as "time unknown": free
- * access begins when the listed UTC calendar day has ended. Finished and
- * privileged matches still bypass that fallback.
+ * Legacy midnight defaults are not kickoffs. An independently checked schedule
+ * can supply a real midnight kickoff, or confirm that no planned time is known.
  */
 export function evaluateDetailsAccess({
     isFinished = false,
     isPrivileged = false,
     expectedStartUtc,
+    plannedStartUtc,
+    allowUnknownStart = false,
     now = new Date(),
     lockHours = DEFAULT_DETAILS_LOCK_HOURS,
 } = {}) {
@@ -40,7 +39,7 @@ export function evaluateDetailsAccess({
     }
 
     const nowAt = asValidDate(now);
-    const schedule = parseExpectedStart(expectedStartUtc);
+    const schedule = parseExpectedStart(plannedStartUtc ?? expectedStartUtc);
 
     if (!nowAt || !schedule) {
         return decision({
@@ -51,7 +50,12 @@ export function evaluateDetailsAccess({
         });
     }
 
-    const unlocksAt = schedule.hasKnownStartTime
+    const hasKnownStartTime = Boolean(plannedStartUtc) || schedule.hasKnownStartTime;
+    if (!hasKnownStartTime && allowUnknownStart) {
+        return decision({ allowed: true, universallyUnlocked: true, reason: 'unknown-time-open',
+            lockHours: normalizedLockHours, hasKnownStartTime: false });
+    }
+    const unlocksAt = hasKnownStartTime
         ? new Date(schedule.expectedStartAt.getTime() - normalizedLockHours * MILLISECONDS_PER_HOUR)
         : schedule.unknownTimeUnlocksAt;
     const allowed = nowAt.getTime() >= unlocksAt.getTime();
@@ -59,13 +63,13 @@ export function evaluateDetailsAccess({
     return decision({
         allowed,
         universallyUnlocked: allowed,
-        reason: schedule.hasKnownStartTime
+        reason: hasKnownStartTime
             ? (allowed ? 'time-unlocked' : 'future-locked')
             : (allowed ? 'unknown-time-day-ended' : 'unknown-time-locked'),
         lockHours: normalizedLockHours,
         expectedStartAt: schedule.expectedStartAt,
         unlocksAt,
-        hasKnownStartTime: schedule.hasKnownStartTime,
+        hasKnownStartTime,
     });
 }
 
