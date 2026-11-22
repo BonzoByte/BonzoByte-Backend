@@ -1,5 +1,6 @@
 import { ArchiveError, openArchiveRelease } from './private-archive-reader/reader.mjs';
 import { createS3Transport } from './private-archive-reader/s3-transport.mjs';
+import { checkedRallyArchiveHead, readRallyArchiveHead } from './rallyArchiveHead.js';
 
 export const PRIVATE_ARCHIVE_ENDPOINT = 'https://6cd78d11a9b52601ce8ffce8f32ae403.r2.cloudflarestorage.com';
 export const PRIVATE_ARCHIVE_BUCKET = 'bb-live-archives';
@@ -38,38 +39,65 @@ export function privateArchiveConfig(settings, { requireCredentials = true } = {
     };
 }
 
-/** One pinned release per runtime. No env loader, local reader, public URL or listing. */
+/** Pinned fallback plus a small, periodically checked private R2 head. */
 export function createPrivateArchiveRuntime({ settings = process.env, getObject, client,
-    GetObjectCommand, createClient, openReader = openArchiveRelease } = {}) {
-    let opening;
+    GetObjectCommand, createClient, openReader = openArchiveRelease, getHead, now=Date.now } = {}) {
+    let opening, refresh, state, expires=0;
     async function initialize() {
         const config = privateArchiveConfig(settings, { requireCredentials: !getObject && !client });
         let ownedClient;
         try {
             let transport = getObject;
+            let head=getHead;
             if (!transport) {
                 const sdk = await import('@aws-sdk/client-s3');
                 const storageClient = client ?? (ownedClient = createClient
                     ? await createClient(config.client) : new sdk.S3Client(config.client));
                 transport = createS3Transport({ enabled: true, client: storageClient,
                     bucket: PRIVATE_ARCHIVE_BUCKET, GetObjectCommand: GetObjectCommand ?? sdk.GetObjectCommand });
+                head ??= () => readRallyArchiveHead(storageClient,GetObjectCommand ?? sdk.GetObjectCommand,PRIVATE_ARCHIVE_BUCKET);
             }
             // private-day-preview is an intentional candidate scope, not a public activation.
             // The approved reader checks candidateOnly=true and activationAllowed=false.
-            return await openReader({ candidate: config.candidate, getObject: transport });
+            const reader=await openReader({ candidate: config.candidate, getObject: transport });
+            state={reader,anchorReader:reader,anchor:config.candidate.sha256,current:config.candidate.sha256,transport,head};
+            return reader;
         } catch (error) {
             ownedClient?.destroy?.();
             throw error;
         }
     }
-    function getReader() {
+    async function getReader() {
         if (!opening) {
             opening = Promise.resolve().then(initialize).catch(error => {
                 opening = undefined; // Coalesced callers fail together; the next request retries.
                 throw error;
             });
         }
-        return opening;
+        await opening;
+        if(!state.head || now()<expires)return state.reader;
+        if(!refresh){
+            refresh=(async()=>{
+                try {
+                    const selected=checkedRallyArchiveHead(await state.head(),state.anchor);
+                    if(selected && selected.candidate.sha256!==state.current){
+                        const incoming=selected.candidate.sha256===state.anchor ? state.anchorReader :
+                            await openReader({candidate:selected.candidate,getObject:state.transport});
+                        if(incoming.releaseId!==selected.release || incoming.through!==selected.through ||
+                           incoming.through<state.anchorReader.through)throw new Error('RALLY_HEAD_GENERATION');
+                        // The release and its date list must both open before the process switches.
+                        const dates=await incoming.availableDates();
+                        if(dates.at(-1)!==incoming.through)throw new Error('RALLY_HEAD_DATES');
+                        state.reader=incoming;state.current=selected.candidate.sha256;
+                    }
+                } catch (error) {
+                    // Retain the last verified generation when R2 or a candidate is unavailable.
+                    if(!getHead) console.warn('Rally archive head not accepted:',error.code ?? error.name);
+                } finally {expires=now()+30_000;}
+            })().finally(()=>{refresh=undefined;});
+        }
+        await refresh;
+        return state.reader;
     }
     async function readBuffer(kind, name, options) {
         try { return await (await getReader()).read(kind, name, options); }
