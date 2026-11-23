@@ -1,6 +1,8 @@
 import { ArchiveError, openArchiveRelease } from './private-archive-reader/reader.mjs';
 import { createS3Transport } from './private-archive-reader/s3-transport.mjs';
 import { checkedRallyArchiveHead, readRallyArchiveHead } from './rallyArchiveHead.js';
+import { withHistoricalDailyArchive } from './historicalDailyArchive.js';
+import { PUBLIC_DAILY_HISTORY } from './publicDailyHistoryPin.js';
 
 export const PRIVATE_ARCHIVE_ENDPOINT = 'https://6cd78d11a9b52601ce8ffce8f32ae403.r2.cloudflarestorage.com';
 export const PRIVATE_ARCHIVE_BUCKET = 'bb-live-archives';
@@ -41,8 +43,11 @@ export function privateArchiveConfig(settings, { requireCredentials = true } = {
 
 /** Pinned fallback plus a small, periodically checked private R2 head. */
 export function createPrivateArchiveRuntime({ settings = process.env, getObject, client,
-    GetObjectCommand, createClient, openReader = openArchiveRelease, getHead, now=Date.now } = {}) {
+    GetObjectCommand, createClient, openReader = openArchiveRelease, getHead, now=Date.now,
+    history = getObject || client ? null : PUBLIC_DAILY_HISTORY } = {}) {
     let opening, refresh, state, expires=0;
+    let historicalOpening, historicalFailure, retryHistoryAt=0, reportHistoryAt=0;
+    const views = new WeakMap();
     async function initialize() {
         const config = privateArchiveConfig(settings, { requireCredentials: !getObject && !client });
         let ownedClient;
@@ -75,7 +80,7 @@ export function createPrivateArchiveRuntime({ settings = process.env, getObject,
             });
         }
         await opening;
-        if(!state.head || now()<expires)return state.reader;
+        if(!state.head || now()<expires)return publicView(state.reader);
         if(!refresh){
             refresh=(async()=>{
                 try {
@@ -97,7 +102,33 @@ export function createPrivateArchiveRuntime({ settings = process.env, getObject,
             })().finally(()=>{refresh=undefined;});
         }
         await refresh;
-        return state.reader;
+        return publicView(state.reader);
+    }
+    async function getHistory() {
+        if(!historicalOpening) {
+            if(now()<retryHistoryAt)throw historicalFailure;
+            historicalOpening=Promise.resolve().then(async()=>{
+                const read=await openReader({candidate:history.candidate,getObject:state.transport,
+                    timeoutMs:7000,cacheBytes:8*1024*1024,maxConcurrentReads:8});
+                if(read.releaseId!==history.release || read.through!==history.through)
+                    throw new ArchiveError('HISTORICAL_RELEASE_MISMATCH');
+                return read;
+            }).catch(error=>{
+                historicalOpening=undefined;historicalFailure=error;retryHistoryAt=now()+30_000;
+                throw error;
+            });
+        }
+        return historicalOpening;
+    }
+    function publicView(reader) {
+        if(!history)return reader;
+        if(!views.has(reader))views.set(reader,withHistoricalDailyArchive(reader,getHistory,error=>{
+            if(now()>=reportHistoryAt){
+                reportHistoryAt=now()+30_000;
+                console.warn('Historical daily catalogue unavailable:',error.code ?? error.name);
+            }
+        }));
+        return views.get(reader);
     }
     async function readBuffer(kind, name, options) {
         try { return await (await getReader()).read(kind, name, options); }
