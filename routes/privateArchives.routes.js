@@ -6,12 +6,14 @@ import { projectPublicDailyMatch } from '../utils/publicDailyMatch.js';
 import { parseSimulationArchiveName } from '../utils/simulationArchiveManifest.js';
 import { resolveDetailsSchedule as hostDetailsSchedule } from '../utils/plannedDetailsSchedule.js';
 import { recentForecastKey, overlayPublicPrematchForecasts } from '../utils/publicPrematchForecast.js';
+import { loadHistoricalScoreDisplay } from '../utils/historicalScoreDisplay.js';
 
 const PRIVATE = 'private, no-store';
 const missing = () => new ArchiveError('ARCHIVE_NOT_FOUND', 404);
 const invalid = () => new ArchiveError('INVALID_ARCHIVE_REQUEST', 400);
 const integrity = () => new ArchiveError('ARCHIVE_INTEGRITY');
 const indexPattern = entity => new RegExp(`^${entity}\\.(?:reviewed|rally)\\.[a-f0-9]{16}\\.br$`);
+const historicalScores = loadHistoricalScoreDisplay((kind, tp) => console.warn('Historical score display binding no longer applies:', kind, tp));
 
 function identifier(value, minimum = 1, maximum = 12) {
     const text = String(value ?? '');
@@ -93,7 +95,7 @@ export function createPrivateArchivesRouter({ runtime = privateArchiveRuntime, r
         const date = dailyDate(req.params.date);
         const rows = await archive.readJson(`daily/${date}.br`);
         if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw integrity();
-        let matches = rows.map(projectPublicDailyMatch);
+        let matches = historicalScores.daily(date, rows).map(projectPublicDailyMatch);
         const forecastKey = recentForecastKey(date);
         if (forecastKey) {
             try {
@@ -114,7 +116,7 @@ export function createPrivateArchivesRouter({ runtime = privateArchiveRuntime, r
         const lockHours = policies.DEFAULT_DETAILS_LOCK_HOURS ?? 2;
         if (!Number.isInteger(lockHours) || lockHours < 0 || lockHours > 24) throw integrity();
         // Keep host access/lock semantics; beta overrides even universally unlocked caching.
-        const handlers = createArchiveHandlers({ ...policies, reader: archive, lockHours, resolveDetailsSchedule, onError: reportError,
+        const handlers = createArchiveHandlers({ ...policies, reader: historicalScores.matchDetailReader(archive), lockHours, resolveDetailsSchedule, onError: reportError,
             getDetailsCachePolicy: access => ({ ...policies.getDetailsCachePolicy(access), cacheControl: PRIVATE }),
             buildDetailsLockedResponse: access => {
                 res.set('X-BB-Guard', '1');
