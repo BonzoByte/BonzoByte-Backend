@@ -7,6 +7,7 @@ import { parseSimulationArchiveName } from '../utils/simulationArchiveManifest.j
 import { resolveDetailsSchedule as hostDetailsSchedule } from '../utils/plannedDetailsSchedule.js';
 import { recentForecastKey, overlayPublicPrematchForecasts } from '../utils/publicPrematchForecast.js';
 import { loadHistoricalScoreDisplay } from '../utils/historicalScoreDisplay.js';
+import { loadHistoricalUnplayedDaily } from '../utils/historicalUnplayedDaily.js';
 
 const PRIVATE = 'private, no-store';
 const missing = () => new ArchiveError('ARCHIVE_NOT_FOUND', 404);
@@ -14,6 +15,7 @@ const invalid = () => new ArchiveError('INVALID_ARCHIVE_REQUEST', 400);
 const integrity = () => new ArchiveError('ARCHIVE_INTEGRITY');
 const indexPattern = entity => new RegExp(`^${entity}\\.(?:reviewed|rally)\\.[a-f0-9]{16}\\.br$`);
 const historicalScores = loadHistoricalScoreDisplay((kind, tp) => console.warn('Historical score display binding no longer applies:', kind, tp));
+const filterHistoricalUnplayedDaily = loadHistoricalUnplayedDaily();
 
 function identifier(value, minimum = 1, maximum = 12) {
     const text = String(value ?? '');
@@ -95,7 +97,8 @@ export function createPrivateArchivesRouter({ runtime = privateArchiveRuntime, r
         const date = dailyDate(req.params.date);
         const rows = await archive.readJson(`daily/${date}.br`);
         if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw integrity();
-        let matches = historicalScores.daily(date, rows).map(projectPublicDailyMatch);
+        const visible = filterHistoricalUnplayedDaily(date, rows);
+        let matches = historicalScores.daily(date, visible).map(projectPublicDailyMatch);
         const forecastKey = recentForecastKey(date);
         if (forecastKey) {
             try {
