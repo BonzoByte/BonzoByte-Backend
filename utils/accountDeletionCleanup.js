@@ -40,7 +40,10 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
             throw deletionError('DELETION_PAYMENT_REVIEW');
         if (await c('mail').findOne({ payment: { $in: rows.map(p => p._id) }, state: 'sending', leaseUntil: { $gt: at } }))
             throw deletionError('DELETION_WAITING');
-        if (await c('siteRegistrations').findOne({ userId: user._id, emailState: 'sending', leaseUntil: { $gt: at } }))
+        if (await c('siteRegistrations').findOne({ userId: user._id, $or: [
+            { emailState: 'sending', leaseUntil: { $gt: at } },
+            { 'copy.emailState': 'sending', 'copy.leaseUntil': { $gt: at } },
+        ] }))
             throw deletionError('DELETION_WAITING');
         if (String(process.env.SITE_INSIGHTS_SECRET || '').length < 32
             && await c('siteVisits').findOne({ members: { $exists: true, $ne: [] } }))
@@ -52,7 +55,7 @@ export function createDeletionCleanup(connection, names = ACCOUNT_COLLECTIONS) {
         await c('avatars').deleteMany({ _id: String(user._id) }, options);
         // Keep only an unlinked signup count; do not retain the erased account ID or send pending owner mail.
         await c('siteRegistrations').updateMany({ userId: user._id }, {
-            $unset: { userId: '', lease: '', leaseUntil: '', nextAttemptAt: '' }, $set: { emailState: 'suppressed' },
+            $unset: { userId: '', lease: '', leaseUntil: '', nextAttemptAt: '', copy: '' }, $set: { emailState: 'suppressed' },
         }, options);
         const insightsSecret = String(process.env.SITE_INSIGHTS_SECRET || '');
         if (insightsSecret.length >= 32) {

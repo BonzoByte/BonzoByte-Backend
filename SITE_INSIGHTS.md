@@ -53,6 +53,31 @@ name/email. Retry at most five times and only within 20 hours, shorter than the
 provider's idempotency window. Ambiguous delivery becomes manual review; do not
 fall back to another provider. Test transports never send real mail.
 
+### Optional team copy (backend only)
+
+Keep the existing owner recipient, access list and mail flags unchanged.
+Set **both** private service settings to enable one separate, direct Resend
+delivery for new confirmed signups:
+
+- `SITE_INSIGHTS_SIGNUP_COPY_TO`: the approved single mailbox, without a display
+  name. Never commit its value or add it to the owner, tester or admin lists.
+- `SITE_INSIGHTS_SIGNUP_COPY_SINCE`: the agreed activation instant in UTC
+  (`YYYY-MM-DDTHH:mm:ssZ`). Choose a future cutover, deploy before it and
+  keep the value unchanged across restarts. Never backdate it.
+
+Only a newly inserted observation for an account **created at or after**
+that instant can queue a copy. A delayed first scan of an older account,
+existing notices (even pending owner mail), and repeated verification do not.
+No migration, backfill, account provisioning or forwarder change is needed.
+The message and sender are the same; the existing private report link does
+not grant access. Each recipient gets a separate message, lease, retry budget
+and event-bound provider key. Copy failure cannot consume an owner retry.
+Only a keyed fingerprint of the copy mailbox and activation instant is stored
+on the notice. Changing either setting does not redirect pending notices.
+Invalid or duplicate settings leave owner delivery intact. To disable copies,
+remove both new settings and redeploy; use a fresh future cutoff for any new
+activation. Never reset an observation, lease or provider key to verify delivery.
+
 ## Activation — separate approval/release required
 
 Default is OFF. Do not change the public archive candidate, Rally, existing Google

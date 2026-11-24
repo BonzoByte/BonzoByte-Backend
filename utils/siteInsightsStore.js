@@ -34,7 +34,7 @@ export function createSiteInsightsStore({ connection, User, config, now = () => 
         // Bounded persistent reconciliation handles password and OAuth verification,
         // restarts and retries without modifying registration/login response paths.
         const users = await User.collection.find({ ...external, isVerified: true, createdAt: { $gte: metadata.startedAt, $lte: now() },
-            siteInsightsRegistrationObservedAt: { $exists: false } }, { projection: { _id: 1, provider: 1 }, maxTimeMS: 5000 })
+            siteInsightsRegistrationObservedAt: { $exists: false } }, { projection: { _id: 1, provider: 1, createdAt: 1 }, maxTimeMS: 5000 })
             .sort({ createdAt: 1, _id: 1 }).limit(20).toArray();
         for (const user of users) {
             const at = now();
@@ -45,6 +45,8 @@ export function createSiteInsightsStore({ connection, User, config, now = () => 
                 await c('registrations').updateOne({ userId: user._id }, { $setOnInsert: { userId: user._id, day: insightsDay(at), observedAt: at,
                     provider: user.provider?.includes('google') ? 'google' : 'email', read: false,
                     emailState: config.emailEnabled ? 'pending' : 'disabled', attempts: 0, nextAttemptAt: at,
+                    ...(config.emailEnabled && config.signupCopy && user.createdAt >= config.signupCopy.start
+                        ? { copy: { tag: config.signupCopy.tag, emailState: 'pending', attempts: 0, nextAttemptAt: at } } : {}),
                     expiresAt: new Date(+at + 90 * 86400000) } }, { upsert: true, session });
             }); }
             catch (error) { if (error.code !== 11000) throw error; }
@@ -53,27 +55,38 @@ export function createSiteInsightsStore({ connection, User, config, now = () => 
     }
     async function sendRegistrationMail() {
         if (!config.emailEnabled || mailer?.provider !== 'resend' || !mailer?.isConfigured) return;
+        await sendOne(false);
+        if (config.signupCopy) await sendOne(true);
+    }
+    async function sendOne(isCopy) {
+        // Keep the owner's original fields, payload and provider key. Independently
+        // lease the copy; old rows have no copy tag and cannot ever be picked up.
+        const p = isCopy ? 'copy.' : '';
         const at = now(), lease = randomUUID();
         // Resend idempotency keys last 24h. Stop retrying after 20h rather than
         // risking duplicate mail after an ambiguous provider response.
         const row = await c('registrations').findOneAndUpdate({ userId: { $exists: true },
-            emailState: { $in: ['pending', 'sending'] }, nextAttemptAt: { $lte: at }, attempts: { $lt: 5 },
-            $or: [{ leaseUntil: { $exists: false } }, { leaseUntil: { $lte: at } }] },
-        { $set: { emailState: 'sending', lease, leaseUntil: new Date(+at + 120000), nextAttemptAt: new Date(+at + 60000) }, $inc: { attempts: 1 } },
+            ...(isCopy ? { 'copy.tag': config.signupCopy.tag } : {}),
+            [p+'emailState']: { $in: ['pending', 'sending'] }, [p+'nextAttemptAt']: { $lte: at }, [p+'attempts']: { $lt: 5 },
+            $or: [{ [p+'leaseUntil']: { $exists: false } }, { [p+'leaseUntil']: { $lte: at } }] },
+        { $set: { [p+'emailState']: 'sending', [p+'lease']: lease, [p+'leaseUntil']: new Date(+at + 120000),
+            [p+'nextAttemptAt']: new Date(+at + 60000) }, $inc: { [p+'attempts']: 1 } },
         { returnDocument: 'after', includeResultMetadata: false });
         if (!row) return;
+        const finish = state => c('registrations').updateOne({ _id: row._id, [p+'lease']: lease }, {
+            $set: { [p+'emailState']: state }, $unset: { [p+'lease']: '', [p+'leaseUntil']: '' } });
         if (+at - +row.observedAt >= 20 * 3600000) {
-            await c('registrations').updateOne({ _id: row._id, lease }, { $set: { emailState: 'review' }, $unset: { lease: '', leaseUntil: '' } }); return;
+            await finish('review'); return;
         }
         const user = await User.collection.findOne({ _id: row.userId, ...external, isVerified: true }, { projection: { _id: 1 } });
-        if (!user) { await c('registrations').updateOne({ _id: row._id, lease }, { $set: { emailState: 'suppressed' }, $unset: { lease: '', leaseUntil: '' } }); return; }
+        if (!user) { await finish('suppressed'); return; }
         try {
-            await mailer.sendMail({ channel: 'accounts', to: config.notifyTo, subject: 'BonzoByte — novi potvrđeni korisnik',
+            await mailer.sendMail({ channel: 'accounts', to: isCopy ? config.signupCopy.to : config.notifyTo, subject: 'BonzoByte — novi potvrđeni korisnik',
                 text: `Novi vanjski korisnički račun potvrđen je na BonzoByteu.\nZabilježeno: ${row.observedAt.toISOString()}\nNačin registracije: ${row.provider}.\nPregled: https://bonzobyte.com/site-insights\nPoruka ne sadrži osobne podatke korisnika.` },
-            { idempotencyKey: 'site-registration-' + row._id });
-            await c('registrations').updateOne({ _id: row._id, lease }, { $set: { emailState: 'accepted' }, $unset: { lease: '', leaseUntil: '' } });
+            { idempotencyKey: (isCopy ? 'site-registration-copy-' : 'site-registration-') + row._id });
+            await finish('accepted');
         } catch {
-            await c('registrations').updateOne({ _id: row._id, lease }, { $set: { emailState: row.attempts >= 5 ? 'review' : 'pending' }, $unset: { lease: '', leaseUntil: '' } });
+            await finish((isCopy ? row.copy : row).attempts >= 5 ? 'review' : 'pending');
         }
     }
     async function summary(days) {

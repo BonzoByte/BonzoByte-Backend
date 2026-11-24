@@ -37,7 +37,21 @@ export function siteInsightsConfig(settings = process.env) {
     const notifyTo = String(settings.SITE_INSIGHTS_NOTIFY_TO || '').trim().toLowerCase();
     const emailEnabled = enabled && settings.SITE_INSIGHTS_EMAIL_ENABLED === 'true';
     if (emailEnabled && !INSIGHTS_OWNERS.includes(notifyTo)) throw insightsError('INVALID_RECIPIENT', 503);
-    return { enabled, origin, secret, emailEnabled, notifyTo, timeZone: 'Europe/Zagreb' };
+    // A copy is a single private mailbox, never an identity or a list of owners.
+    let signupCopy = null;
+    const to = String(settings.SITE_INSIGHTS_SIGNUP_COPY_TO || '').toLowerCase();
+    const since = String(settings.SITE_INSIGHTS_SIGNUP_COPY_SINCE || '');
+    if (emailEnabled && (to || since)) {
+        const start = new Date(since);
+        const mailbox = /^[a-z0-9_+-]+(?:\.[a-z0-9_+-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
+        if (to.length <= 254 && !/\s/.test(to) && mailbox.test(to) && Number.isFinite(+start)
+            && (start.toISOString() === since || start.toISOString().replace('.000Z', 'Z') === since)) {
+            if (to !== notifyTo) signupCopy = { to, start, tag: insightsHash(secret, 'signup-copy', start.toISOString() + ':' + to) };
+        } else {
+            console.warn('[SITE INSIGHTS] Invalid signup copy settings; owner delivery is unchanged.');
+        }
+    }
+    return { enabled, origin, secret, emailEnabled, notifyTo, signupCopy, timeZone: 'Europe/Zagreb' };
 }
 export function summarizeInsights(rows, registrations, accounts, meta, at, days) {
     const visitors = new Set(), members = new Set(), daily = new Map(), sections = {};

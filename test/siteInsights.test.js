@@ -41,6 +41,22 @@ test('withdrawal remains available with recording disabled and never falsely ack
   connected=true;disabled.secret='';assert.equal((await request('/opt-out',{visitorId:randomUUID()})).status,503);assert.equal(purges,1);
  }finally{await new Promise(resolve=>server.close(resolve));}
 });
+test('private signup copy config is optional, single-address, and never an access rule',()=>{
+ const settings={SITE_INSIGHTS_ENABLED:'true',SITE_INSIGHTS_SECRET:'private-synthetic-test-secret'.repeat(2),NODE_ENV:'production',APP_STAGE:'beta',
+  FRONTEND_URL:config.origin,BETA_PUBLIC_ORIGIN:config.origin,MONGO_DB:'BonzoByte_Beta',SITE_INSIGHTS_EMAIL_ENABLED:'true',
+  SITE_INSIGHTS_NOTIFY_TO:owner.email};
+ const to='team@example.invalid',since='2026-11-24T20:00:00Z';
+ const parse=(dest,start)=>siteInsightsConfig({...settings,SITE_INSIGHTS_SIGNUP_COPY_TO:dest,SITE_INSIGHTS_SIGNUP_COPY_SINCE:start});
+ const active=parse(to.toUpperCase(),since);
+ assert.equal(active.notifyTo,owner.email);assert.equal(active.signupCopy.to,to);
+ assert.equal(+active.signupCopy.start,Date.parse(since));assert.equal(insightsOwner({email:to,isVerified:true}),false);
+ assert.equal(internalInsightsAccount({email:to}),false);assert.equal(JSON.stringify(active.signupCopy.tag).includes(to),false);
+ for(const [dest,start] of [[undefined,undefined],[owner.email,since],['a@b.invalid,c@d.invalid',since],
+  ['somebody <team@example.invalid>',since],[to+'\r\nBcc: x@y.invalid',since],[to,'yesterday'],[to,'2026-02-31T00:00:00Z'],[to,undefined]]){
+  const inactive=parse(dest,start);assert.equal(inactive.signupCopy,null);assert.equal(inactive.emailEnabled,true);assert.equal(inactive.notifyTo,owner.email);
+ }
+ assert.notEqual(parse(to,'2026-11-25T20:00:00Z').signupCopy.tag,active.signupCopy.tag);
+});
 test('events require fresh-purpose consent and never accept arbitrary URLs, emails or IDs',()=>{
  assert.ok(validateInsightsEvent(event()));
  for(const patch of [{consent:false},{policy:'old'},{visitorId:'email@example.invalid'},{section:'/matches?q=private'},
@@ -56,7 +72,7 @@ test('summaries distinguish browser estimates, active members, current accounts 
 });
 test('HTTP: origins, internal exclusion, private reports, opt-out, strict payloads and disabled mode',async()=>{
  let writes=0,purges=0;
- const app=express();app.use('/api/site-insights',createSiteInsightsRouter({config,available:()=>true,
+ const app=express();app.use('/api/site-insights',createSiteInsightsRouter({config:{...config,signupCopy:{to:'external@example.invalid'}},available:()=>true,
   identity:(req,res,next)=>{const token=req.headers.authorization;if(token==='Bearer owner')req.user=owner;
    else if(token==='Bearer member')req.user={email:'external@example.invalid',isVerified:true};else if(token)return res.status(401).json({code:'AUTH'});next();},
   store:{record:async()=>{writes++;},purge:async()=>{purges++;},summary:async days=>({days}),notifications:async()=>[],markRead:async()=>{writes++;}}
@@ -68,6 +84,8 @@ test('HTTP: origins, internal exclusion, private reports, opt-out, strict payloa
   assert.equal((await request('/view',event(),'http://localhost:4200')).status,403);
   assert.equal((await request('/view',event(),'https://preview.vercel.app')).status,403);assert.equal(writes,0);
   assert.equal((await request('/summary')).status,401);assert.equal((await request('/summary',null,config.origin,'member')).status,403);
+  assert.equal((await request('/notifications',null,config.origin,'member')).status,403);
+  assert.equal((await request('/notifications/read',{ids:['a'.repeat(24)]},config.origin,'member')).status,403);
   const report=await request('/summary?days=7',null,config.origin,'owner');assert.equal(report.status,200);assert.match(report.headers.get('cache-control'),/no-store/);
   assert.equal((await request('/summary?days=365',null,config.origin,'owner')).status,400);
   assert.equal((await request('/view',event(),config.origin,'owner')).status,200);assert.equal(writes,0);
@@ -85,7 +103,8 @@ test('account erasure waits for pending owner mail and unlinks all member hashes
  let sending=true,hasMemberRows=true;
  const connection={collection:name=>({
   find:()=>({toArray:async()=>[]}),
-  findOne:async()=>name==='siteinsights_registrations'&&sending?{lease:true}:name==='siteinsights_visits'&&hasMemberRows?{members:['synthetic']}:null,
+  findOne:async query=>name==='siteinsights_registrations'&&sending&&query.$or?.some(q=>
+   q['copy.emailState']==='sending'&&q['copy.leaseUntil']?.$gt instanceof Date)?{lease:true}:name==='siteinsights_visits'&&hasMemberRows?{members:['synthetic']}:null,
   updateMany:async(...args)=>{mutations.push({name,args});return{modifiedCount:1};},deleteMany:async()=>({deletedCount:0}),
  })};
  const cleanup=createDeletionCleanup(connection),session={syntheticSession:true};
@@ -98,6 +117,7 @@ test('account erasure waits for pending owner mail and unlinks all member hashes
   await cleanup.erase(user,session);
   const registration=mutations.find(row=>row.name==='siteinsights_registrations');
   assert.deepEqual(registration.args[0],{userId:user._id});assert.equal(registration.args[1].$unset.userId,'');
+  assert.equal(registration.args[1].$unset.copy,'');
   assert.equal(registration.args[1].$set.emailState,'suppressed');assert.equal(registration.args[2].session,session);
   const visits=mutations.find(row=>row.name==='siteinsights_visits'),hash=insightsHash(key,'member',user._id);
   assert.deepEqual(visits.args[0],{members:hash});assert.deepEqual(visits.args[1],{$pull:{members:hash}});assert.equal(visits.args[2].session,session);
