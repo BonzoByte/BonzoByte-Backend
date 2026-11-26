@@ -47,8 +47,11 @@ export function shortlist(html,m) {
 async function get(path,limit){
     const r=await fetch(origin+path,{redirect:'error',signal:AbortSignal.timeout(8000),headers:{'User-Agent':'BonzoByte/1.0 (match-status reader)'}});
     if(!r.ok){await r.body?.cancel();throw Error('source unavailable');}
-    const at=Date.parse(r.headers.get('date')),now=Date.now();
-    if(!Number.isFinite(at)||at>now||now-at>=120000||Number(r.headers.get('age')||0)>=120){await r.body?.cancel();throw Error('stale');}
+    const stamp=Date.parse(r.headers.get('date')),now=Date.now(),age=Number(r.headers.get('age')||0);
+    // HTTP Date is second-resolution. Never credit an upstream clock lead
+    // with extra quote life, or reset a cached response's observed age.
+    const at=Math.min(stamp,now-age*1000);
+    if(!Number.isFinite(at)||stamp>now+3000||age<0||now-at>=120000){await r.body?.cancel();throw Error('stale');}
     let size=0;const parts=[];for await(const part of r.body){size+=part.length;if(size>limit)throw Error('source size');parts.push(part);}
     const html=Buffer.concat(parts).toString();if(/cf-chl-|verify you are human|<title[^>]*>[^<]*(?:access denied|just a moment)/i.test(html))throw Error('source unavailable');
     return {html,at};
