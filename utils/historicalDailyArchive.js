@@ -4,6 +4,9 @@ import { readHistoricalMatchList } from './historicalMatchLists.js';
 export const FIRST_RECENT_DAY = '2026-11-01';
 const daily = /^daily\/(\d{4})(\d{2})(\d{2})\.br$/;
 const detail = /^matches\/([1-9][0-9]*)\.br$/;
+// These are whole-career exports, not lists of matches from a date window.
+// A Rally update for an active player is already a full replacement snapshot.
+const profile = /^(?:players\/(?:details|lite|ts)|tournaments\/lite)\/[1-9][0-9]*\.br$/;
 const missing = e => e instanceof ArchiveError && e.code === 'ARCHIVE_NOT_FOUND' && e.status === 404;
 const historicalDay = path => {
     const m = daily.exec(path);
@@ -11,9 +14,14 @@ const historicalDay = path => {
 };
 
 // Augment the existing recent head without changing its release identity.
-// Historical reports, ratings, entity indexes and permission rules do not
-// fall through. Entity match lists use the same date boundary as the daily grid.
+// Index pointers stay with Rally's full directories (which also contain newly
+// added identities). Reports, match access rules and the live head do not change.
 export function withHistoricalDailyArchive(recent, getHistory, onHistoryUnavailable = () => {}) {
+    async function readProfile(load) {
+        try { return await load(recent); }
+        catch (error) { if (!missing(error)) throw error; }
+        return load(await getHistory());
+    }
     async function lookup(axis, id, options) {
         const found = await recent[axis](id, options);
         if (found) return found;
@@ -29,6 +37,7 @@ export function withHistoricalDailyArchive(recent, getHistory, onHistoryUnavaila
         return load(old, id);
     }
     async function readPath(method, path, options) {
+        if (profile.test(path)) return readProfile(r => r[method](path, options));
         if (historicalDay(path)) return (await getHistory())[method](path, options);
         const m = detail.exec(path);
         if (m) return detailRead(m[1], options, (r, id) => r[method](`matches/${id}.br`, options));
@@ -48,6 +57,11 @@ export function withHistoricalDailyArchive(recent, getHistory, onHistoryUnavaila
             }
         },
         async read(kind, name, options) {
+            if (kind === 'player-details' || kind === 'players/details' || kind === 'players/lite' ||
+                kind === 'players/ts' || kind === 'tournaments/lite') {
+                if (/^[1-9][0-9]*$/.test(String(name)))
+                    return readProfile(r => r.read(kind, name, options));
+            }
             if(kind==='players/matches'||kind==='tournaments/matches')
                 return readHistoricalMatchList(recent,getHistory,FIRST_RECENT_DAY,kind,name,options);
             if (kind === 'daily' && historicalDay(`daily/${name}.br`))

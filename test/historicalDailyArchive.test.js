@@ -53,3 +53,36 @@ test('a history failure does not break recent dates or mask a recent integrity e
     assert.equal(notices,1);
     await assert.rejects(view.readJson('daily/19900101.br'),{code:'ARCHIVE_STORAGE_UNAVAILABLE'});
 });
+
+test('career snapshots: existing Rally updates win, otherwise read the full archive in the same format', async () => {
+    for (const kind of ['player-details','players/details','players/ts','players/lite','tournaments/lite']) {
+        const logical=(kind==='player-details'?'players/details':kind)+'/497597.br';
+        for(const [method, args] of [['read',[kind,'497597']], ...['readVerified','readJson','readRelative'].map(m=>[m,[logical]])]){
+            const options={signal:new AbortController().signal};
+            let error=null, opens=0;
+            const latest={current:true}, full={current:false};
+            const recent={ [method](...a){assert.deepEqual(a,[...args,options]);if(error)throw error;return latest;} };
+            const old={ [method](...a){assert.deepEqual(a,[...args,options]);return full;} };
+            const view=withHistoricalDailyArchive(recent,async()=>{opens++;return old;});
+            assert.equal(await view[method](...args, options),latest);
+            for(const failure of [new ArchiveError('ARCHIVE_INTEGRITY'),new ArchiveError('ARCHIVE_STORAGE_UNAVAILABLE'),new Error('aborted')]){
+                error=failure; await assert.rejects(view[method](...args,options),e=>e===failure);
+            }
+            assert.equal(opens,0);
+            error=missing();
+            assert.equal(await view[method](...args,options),full);
+            assert.equal(opens,1);
+            old[method]=()=>{throw missing();};
+            await assert.rejects(view[method](...args,options),{code:'ARCHIVE_NOT_FOUND'});
+        }
+    }
+});
+
+test('other files and malformed profile paths cannot select the old snapshot',async()=>{
+    const recent={read:()=>{throw missing();},readJson:()=>{throw missing();}};
+    const view=withHistoricalDailyArchive(recent,()=>assert.fail('unexpected history lookup'));
+    for(const p of ['players/ts/0.br','players/ts/../11.br','players/indexBuild/manifest.json','research/simulation-min10-study.json'])
+        await assert.rejects(view.readJson(p),{code:'ARCHIVE_NOT_FOUND'});
+    for(const [k,n] of [['players/ts','../11'],['players/details',''],['other',11]])
+        await assert.rejects(view.read(k,n),{code:'ARCHIVE_NOT_FOUND'});
+});
