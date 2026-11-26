@@ -44,6 +44,9 @@ export function createCompetitionRouter({ service, auth = protect, limits = {}, 
     router.get('/leaderboard', handle(async (req, res) => {
         query(req, ['month', 'demo']); res.json(await service.leaderboard(competitionMonth(req.query.month, now()), demo(req)));
     }));
+    router.get('/me/stats', auth, member, handle(async (req, res) => {
+        query(req); res.json(await service.ownStats(actor(req)));
+    }));
     router.get('/me', auth, member, handle(async (req, res) => {
         query(req, ['month', 'demo']); res.json(await service.me(actor(req), competitionMonth(req.query.month, now()), demo(req)));
     }));

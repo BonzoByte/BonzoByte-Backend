@@ -1,5 +1,6 @@
 import { competitionError, COMPETITION_RULES, settleCompetitionPick } from './competitionPolicy.js';
 import { competitionProfileId, competitionProfileQuery } from './competitionPrivacy.js';
+const maxMonthlyPicks = 31 * COMPETITION_RULES.dailyLimit;
 
 export function createCompetitionStore({ connection, User, environment, allowedSources = [], now = () => new Date() }) {
     if (!['development', 'production', 'development-demo', 'development-fixtures'].includes(environment)) throw new Error('Invalid competition environment');
@@ -37,8 +38,8 @@ export function createCompetitionStore({ connection, User, environment, allowedS
     const readMatch = (id, session) => matches().findOne({ _id: id }, opts(session));
     async function own(actor, month) {
         await assertActor(actor);
-        const rows = await picks().find({ environment, userId: actor.user, month }, opts()).sort({ submittedAt: -1 }).limit(201).toArray();
-        if (rows.length > 200) throw competitionError('COMPETITION_UNAVAILABLE');
+        const rows = await picks().find({ environment, userId: actor.user, month }, opts()).sort({ submittedAt: -1 }).limit(maxMonthlyPicks + 1).toArray();
+        if (rows.length > maxMonthlyPicks) throw competitionError('COMPETITION_UNAVAILABLE');
         const today = now().toISOString().slice(0, 10);
         const used = await picks().countDocuments({ environment, userId: actor.user, day: today }, opts());
         await assertActor(actor);
@@ -47,6 +48,19 @@ export function createCompetitionStore({ connection, User, environment, allowedS
     async function ownMatch(actor, id) {
         const row = await picks().findOne({ environment, userId: actor.user, matchTPId: id }, opts());
         await assertActor(actor); return row;
+    }
+    async function ownStats(actor) {
+        await assertActor(actor);
+        const [totals] = await picks().aggregate([
+            { $match: { environment, userId: actor.user } },
+            { $group: { _id: null,
+                pending: { $sum: { $cond: [{ $eq: [{ $ifNull: ['$settlement', null] }, null] }, 1, 0] } },
+                won: { $sum: { $cond: [{ $eq: ['$settlement.status', 'won'] }, 1, 0] } },
+                settled: { $sum: { $cond: [{ $in: ['$settlement.status', ['won', 'lost']] }, 1, 0] } },
+            } },
+        ], opts()).toArray();
+        await assertActor(actor);
+        return { pending: totals?.pending ?? 0, won: totals?.won ?? 0, settled: totals?.settled ?? 0 };
     }
     async function publicPicks(id, month) {
         const query = competitionProfileQuery(id, environment);
@@ -58,8 +72,8 @@ export function createCompetitionStore({ connection, User, environment, allowedS
             'settlement.status': { $in: ['won', 'lost', 'void'] },
             'settlement.settledAt': { $type: 'string', $lte: at },
             'snapshot.startAt': { $type: 'string', $lte: at }, 'snapshot.lockAt': { $type: 'string', $lte: at },
-        }, opts()).sort({ submittedAt: -1 }).limit(201).toArray();
-        if (rows.length > 200) throw competitionError('COMPETITION_UNAVAILABLE');
+        }, opts()).sort({ submittedAt: -1 }).limit(maxMonthlyPicks + 1).toArray();
+        if (rows.length > maxMonthlyPicks) throw competitionError('COMPETITION_UNAVAILABLE');
         // Recheck after reading, so a concurrent closure or privacy change fails closed.
         const fresh = await User.collection.findOne({ ...query, _id: user._id,
             ...(['development-demo', 'development-fixtures'].includes(environment) ? {} : { 'competitionPrivacy.revision': user.competitionPrivacy?.revision ?? null }),
@@ -144,5 +158,5 @@ export function createCompetitionStore({ connection, User, environment, allowedS
     const candidates = at => matches().find({status:'scheduled',rallyHeld:{$ne:true},$or:[
         {statusObservedAt:{$gte:new Date(+at-120000).toISOString()}},{scheduleCheckedAt:{$gte:new Date(+at-120000).toISOString()}}],
         source:{$in:allowedSources}, firstLockAt:{$gt:at.toISOString()}},opts()).limit(2000).toArray();
-    return { initialize, candidates, readMatch, own, ownMatch, publicPicks, accept, community, leaderboard, reconcile };
+    return { initialize, candidates, readMatch, own, ownStats, ownMatch, publicPicks, accept, community, leaderboard, reconcile };
 }

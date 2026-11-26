@@ -63,6 +63,7 @@ export function createCompetition({ store, secret, allowedSources = [], modelFai
             });
             return { pick: publicPick(pick) };
         },
+        async ownStats(actor) { guard(); return store.ownStats(actor); },
         async me(actor, month) {
             guard(); const { rows, remainingToday } = await store.own(actor, month);
             return { month, remainingToday, entries: rows.map(publicPick), summary: competitionSummary(rows), rules: COMPETITION_RULES };

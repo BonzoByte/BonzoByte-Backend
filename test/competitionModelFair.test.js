@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCompetition } from '../utils/competition.js';
+import { createCompetitionStore } from '../utils/competitionStore.js';
 import { competitionEligibility, competitionSummary, modelFairOdds, validateCompetitionObservation, settleCompetitionPick } from '../utils/competitionPolicy.js';
 import { publishCompetitionObservation } from '../utils/competitionPublisher.js';
 
@@ -24,6 +25,33 @@ test('derives the full precision pair without any bookmaker fields',()=>{
         assert.throws(()=>validateCompetitionObservation({...packet,...invalid}),/COMPETITION_INVALID_SOURCE/);
     assert.equal(modelFairOdds(0),null);
     assert.equal(modelFairOdds(1),null);
+});
+
+test('tenth prediction is accepted; the eleventh is rejected at submission',async()=>{
+    let used=9;
+    const now=()=>new Date(at),actor={user:'limit-fixture'};
+    const store={readMatch:async()=>packet,ownMatch:async()=>null,
+        accept:async(_actor,id,create)=>{
+            const row=create({source:packet,used,at:now()});
+            used++; return {...row,matchTPId:id};
+        }};
+    const svc=createCompetition({store,secret:'fixture-only',allowedSources,now});
+    const {quote}=await svc.match(actor,packet.matchTPId);
+    assert.equal(svc.rules().dailyLimit,10);
+    const body={side:0,token:quote.token};
+    assert.equal((await svc.submit(actor,packet.matchTPId,body)).pick.side,0);
+    await assert.rejects(svc.submit(actor,packet.matchTPId,body),{code:'COMPETITION_DAILY_LIMIT'});
+    assert.equal(used,10);
+});
+
+test('both histories serve a full 31-day month at ten per day', async()=>{
+    const rows=Array.from({length:310},(_,i)=>({matchTPId:i+1}));
+    const cursor={sort(){return this},limit(n){return {toArray:async()=>rows.slice(0,n)}}};
+    const store=createCompetitionStore({environment:'production',User:{collection:{findOne:async()=>({_id:'user'})}},
+        connection:{collection:()=>({find:()=>cursor,countDocuments:async()=>7})}});
+    const own=await store.own({user:'user',tokenVersion:0},'2026-10');
+    assert.equal(own.rows.length,310); assert.equal(own.remainingToday,3);
+    assert.equal((await store.publicPicks('12345678-1234-4123-8123-123456789abc','2026-10')).rows.length,310);
 });
 
 test('status must remain fresh and the first five-minute lock cannot be reopened',()=>{

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const COMPETITION_RULES = Object.freeze({ version: 2, stake: 1, dailyLimit: 5,
+export const COMPETITION_RULES = Object.freeze({ version: 3, stake: 1, dailyLimit: 10,
     minimumSettled: 30, lockMinutes: 0, timeZone: 'UTC', money: false, prizes: true,
     rewardMembership: 'premium', rewardDays: 30, rewardReviewRequired: true, rewardAutomatic: false,
     changesAllowed: false, ranking: 'netUnits', monthBy: 'firstSubmission',
