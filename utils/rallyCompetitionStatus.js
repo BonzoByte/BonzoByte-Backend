@@ -36,7 +36,10 @@ export function shortlist(html,m) {
     const rows=all(parse(html),n=>n.tagName==='tr'), hits=[];
     const short=(label,full)=>{const v=norm(label),f=norm(full);return v.length>=4&&(f===v||f.startsWith(v));};
     for(let i=0;i+1<rows.length;i++){
-        const r=rows[i],s=rows[i+1]; if(!cls(r,'fRow')||!attr(r,'id')||attr(s,'id')!==attr(r,'id')+'b')continue;
+        // fRow marks the first match of a tournament; later matches start with
+        // bott alone. Never join a player to a row in a different table section.
+        const r=rows[i],s=rows[i+1],id=attr(r,'id');
+        if(!(cls(r,'fRow')||cls(r,'bott'))||!id||s.parentNode!==r.parentNode||attr(s,'id')!==id+'b')continue;
         const label=row=>txt(one(all(row,n=>n.tagName==='a'&&/^\/player\//.test(attr(n,'href')))));
         const a=label(r),b=label(s);if(!short(a,m.player1Name)||!short(b,m.player2Name))continue;
         const link=one(all(r,n=>n.tagName==='a'&&/^\/match-detail\/\?id=\d+$/.test(attr(n,'href'))));
