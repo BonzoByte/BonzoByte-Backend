@@ -22,26 +22,45 @@ const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{
     && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 19) === value.slice(0, 19);
 const text = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 160;
 const fresh = (value, now, age) => date(value) && Date.parse(value) <= +now && +now - Date.parse(value) <= age;
+export const MODEL_FAIR_ODDS = 'model-fair';
+const MODEL_SOURCE_SCHEMA = 'bonzobyte.competition-model-source.v1';
+
+export function modelFairOdds(p1) {
+    if (!Number.isFinite(p1) || p1 <= 0 || p1 >= 1) return null;
+    const pair = [1 / p1, 1 / (1 - p1)];
+    // Reject non-representable extremes; do not clamp or invent another quote.
+    return pair.every(o => Number.isFinite(o) && o > 1 && o <= Number.MAX_SAFE_INTEGER) ? pair : null;
+}
 
 /** Trusted publisher contract, not a projection of historic Match/MatchActive rows.
  * Observation time means source observation, NEVER file mtime/import time. */
 export function validateCompetitionObservation(input) {
-    if (!input || input.schema !== 'bonzobyte.competition-source.v1'
+    const modelFair = input?.schema === MODEL_SOURCE_SCHEMA && input.oddsKind === MODEL_FAIR_ODDS;
+    if (!input || (!modelFair && input.schema !== 'bonzobyte.competition-source.v1')
         || !validCompetitionId(input.matchTPId) || !Number.isSafeInteger(input.revision) || input.revision < 1
         || !text(input.source) || !text(input.sourceEventId) || !text(input.tournament)
-        || !date(input.startAt) || !date(input.statusObservedAt) || !date(input.oddsObservedAt)
+        || !date(input.startAt) || !date(input.statusObservedAt)
         || !['minute', 'second'].includes(input.timePrecision)
         || !['scheduled', 'live', 'finished', 'cancelled', 'walkover', 'retired'].includes(input.status)
         || !Array.isArray(input.players) || input.players.length !== 2
         || !input.players.every(p => validCompetitionId(p.id) && text(p.name))
-        || input.players[0].id === input.players[1].id
-        || !Array.isArray(input.odds) || input.odds.length !== 2
-        || !input.odds.every(o => Number.isFinite(o) && o > 1 && o <= 1000)
-        || input.oddsKind !== 'median' || !Number.isSafeInteger(input.bookmakers) || input.bookmakers < 1)
+        || input.players[0].id === input.players[1].id)
         throw competitionError('COMPETITION_INVALID_SOURCE', 400);
     if (input.model != null && (!text(input.model.version) || !date(input.model.issuedAt)
         || !Number.isFinite(input.model.p1) || input.model.p1 < 0 || input.model.p1 > 1))
         throw competitionError('COMPETITION_INVALID_SOURCE', 400);
+    const fair = modelFair ? modelFairOdds(input.model?.p1) : null;
+    if (modelFair) {
+        if (!fair || Date.parse(input.model.issuedAt) > Date.parse(input.statusObservedAt)
+            || (input.odds != null && (!Array.isArray(input.odds) || input.odds.length !== 2 || fair.some((o,i) => o !== input.odds[i])))
+            || (input.bookmakers != null && input.bookmakers !== 0)
+            || (input.oddsObservedAt != null && input.oddsObservedAt !== input.model.issuedAt))
+            throw competitionError('COMPETITION_INVALID_SOURCE', 400);
+    } else if (!date(input.oddsObservedAt) || !Array.isArray(input.odds) || input.odds.length !== 2
+        || !input.odds.every(o => Number.isFinite(o) && o > 1 && o <= 1000)
+        || input.oddsKind !== 'median' || !Number.isSafeInteger(input.bookmakers) || input.bookmakers < 1) {
+        throw competitionError('COMPETITION_INVALID_SOURCE', 400);
+    }
     if (input.status === 'finished' && (input.resultVerified !== true || ![0, 1].includes(input.winner)
         || Date.parse(input.statusObservedAt) < Date.parse(input.startAt)))
         throw competitionError('COMPETITION_INVALID_SOURCE', 400);
@@ -51,21 +70,24 @@ export function validateCompetitionObservation(input) {
     return { schema: input.schema, matchTPId: input.matchTPId, revision: input.revision,
         source: input.source, sourceEventId: input.sourceEventId, tournament: input.tournament,
         startAt: input.startAt, timePrecision: input.timePrecision, status: input.status,
-        statusObservedAt: input.statusObservedAt, oddsObservedAt: input.oddsObservedAt,
-        players: input.players.map(({ id, name }) => ({ id, name })), odds: [...input.odds],
-        oddsKind: 'median', bookmakers: input.bookmakers,
+        statusObservedAt: input.statusObservedAt, oddsObservedAt: modelFair ? input.model.issuedAt : input.oddsObservedAt,
+        players: input.players.map(({ id, name }) => ({ id, name })), odds: modelFair ? fair : [...input.odds],
+        oddsKind: modelFair ? MODEL_FAIR_ODDS : 'median', bookmakers: modelFair ? 0 : input.bookmakers,
         model: input.model ? { version: input.model.version, issuedAt: input.model.issuedAt, p1: input.model.p1 } : null,
         winner: input.status === 'finished' ? input.winner : null, resultVerified: input.resultVerified === true };
 }
-export function competitionEligibility(source, now = new Date(), allowedSources = []) {
-    if (!source) return 'sourceUnavailable';
+export function competitionEligibility(source, now = new Date(), allowedSources = [], { modelFairOnly = false } = {}) {
+    if (!source || source.rallyHeld === true) return 'sourceUnavailable';
     let row;
     try { row = validateCompetitionObservation(source); } catch { return 'sourceUnavailable'; }
-    if (!allowedSources.includes(row.source)) return 'sourceUnavailable';
+    if (!allowedSources.includes(row.source) || (modelFairOnly && row.oddsKind !== MODEL_FAIR_ODDS)) return 'sourceUnavailable';
     if (row.status !== 'scheduled') return 'locked';
     const lockAt = Math.min(Date.parse(row.startAt) - 300000, source.firstLockAt ? +new Date(source.firstLockAt) : Infinity);
     if (!Number.isFinite(lockAt) || +now >= lockAt) return 'locked';
-    if (!fresh(row.statusObservedAt, now, 120000) || !fresh(row.oddsObservedAt, now, 600000)) return 'stale';
+    if (!fresh(row.statusObservedAt, now, 120000)) return 'stale';
+    if (row.oddsKind === MODEL_FAIR_ODDS) {
+        if (Date.parse(row.model.issuedAt) >= lockAt) return 'locked';
+    } else if (!fresh(row.oddsObservedAt, now, 600000)) return 'stale';
     return null;
 }
 export function competitionSnapshot(source) {
@@ -87,7 +109,8 @@ export function settleCompetitionPick(pick, result, now = new Date()) {
     const pnl = side => side === null ? null : voided ? 0 : side === row.winner ? rounded(pick.snapshot.odds[side] - 1) : -1;
     const probability = pick.snapshot.model?.p1;
     const modelSide = probability == null || probability === 0.5 ? null : probability > 0.5 ? 0 : 1;
-    const marketSide = pick.snapshot.odds[0] === pick.snapshot.odds[1] ? null : pick.snapshot.odds[0] < pick.snapshot.odds[1] ? 0 : 1;
+    const marketSide = pick.snapshot.oddsKind === MODEL_FAIR_ODDS || pick.snapshot.odds[0] === pick.snapshot.odds[1]
+        ? null : pick.snapshot.odds[0] < pick.snapshot.odds[1] ? 0 : 1;
     return { sourceRevision: row.revision, settledAt: now.toISOString(),
         status: voided ? 'void' : pick.side === row.winner ? 'won' : 'lost', reason: row.status,
         units: pnl(pick.side), modelUnits: pnl(modelSide), marketUnits: pnl(marketSide),

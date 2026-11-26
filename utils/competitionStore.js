@@ -32,6 +32,7 @@ export function createCompetitionStore({ connection, User, environment, allowedS
         await picks().createIndex({ environment: 1, month: 1 }, { maxTimeMS: 30000 });
         await picks().createIndex({ environment: 1, matchTPId: 1, 'settlement.sourceRevision': 1 }, { maxTimeMS: 30000 });
         await matches().createIndex({ pendingSettlement: 1, _id: 1 }, { maxTimeMS: 30000 });
+        await matches().createIndex({status:1, statusObservedAt:-1}, {maxTimeMS:30000});
     }
     const readMatch = (id, session) => matches().findOne({ _id: id }, opts(session));
     async function own(actor, month) {
@@ -140,5 +141,7 @@ export function createCompetitionStore({ connection, User, environment, allowedS
         }
         return { processed };
     }
-    return { initialize, readMatch, own, ownMatch, publicPicks, accept, community, leaderboard, reconcile };
+    const candidates = at => matches().find({status:'scheduled',statusObservedAt:{$gte:new Date(+at-120000).toISOString()},
+        source:{$in:allowedSources}, firstLockAt:{$gt:at.toISOString()}},opts()).limit(2000).toArray();
+    return { initialize, candidates, readMatch, own, ownMatch, publicPicks, accept, community, leaderboard, reconcile };
 }

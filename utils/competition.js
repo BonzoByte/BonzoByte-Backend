@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { COMPETITION_RULES, competitionError, competitionEligibility, competitionSnapshot,
     snapshotHash, competitionSummary } from './competitionPolicy.js';
 
-export function createCompetition({ store, secret, allowedSources = [], available = () => true, now = () => new Date() }) {
+export function createCompetition({ store, secret, allowedSources = [], modelFairOnly = false, connected=()=>allowedSources.length>0, available = () => true, now = () => new Date() }) {
     const key = createHash('sha256').update('bonzobyte-competition-quote\0' + (secret || '')).digest('hex');
     const guard = () => { if (!available() || !secret) throw competitionError('COMPETITION_UNAVAILABLE'); };
     const publicPick = pick => pick ? ({ matchTPId: pick.matchTPId, side: pick.side, snapshot: pick.snapshot,
@@ -18,11 +18,17 @@ export function createCompetition({ store, secret, allowedSources = [], availabl
         } catch { throw competitionError('COMPETITION_QUOTE_EXPIRED', 409); }
     }
     return {
-        rules: () => ({ ...COMPETITION_RULES, sourceConnected: allowedSources.length > 0 }),
+        rules: () => ({ ...COMPETITION_RULES, sourceConnected: connected() }),
+        async openings() {
+            guard(); const at = now(), rows = await store.candidates(at);
+            const entries = rows.flatMap(row => competitionEligibility(row, at, allowedSources, { modelFairOnly }) ? [] :
+                [{id:row.matchTPId, until:Math.min(Date.parse(competitionSnapshot(row).lockAt),Date.parse(row.statusObservedAt)+120000)}]);
+            return {serverAt:+at, entries};
+        },
         async match(actor, id) {
             guard(); const at = now();
             const [source, pick] = await Promise.all([store.readMatch(id), store.ownMatch(actor, id)]);
-            const reason = pick ? 'alreadyPicked' : competitionEligibility(source, at, allowedSources);
+            const reason = pick ? 'alreadyPicked' : competitionEligibility(source, at, allowedSources, {modelFairOnly});
             let quote = null;
             if (!reason) {
                 const snapshot = competitionSnapshot(source);
@@ -47,7 +53,7 @@ export function createCompetition({ store, secret, allowedSources = [], availabl
                     throw competitionError('COMPETITION_ALREADY_PICKED', 409);
                 }
                 const quote = decode(body.token, actor, id);
-                const reason = competitionEligibility(source, at, allowedSources);
+                const reason = competitionEligibility(source, at, allowedSources, {modelFairOnly});
                 if (reason) throw competitionError('COMPETITION_LOCKED', 409);
                 if (used >= COMPETITION_RULES.dailyLimit) throw competitionError('COMPETITION_DAILY_LIMIT', 409);
                 const snapshot = competitionSnapshot(source);

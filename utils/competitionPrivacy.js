@@ -50,6 +50,7 @@ export function sharedCompetitionPick(pick) {
         snapshot: { matchTPId: s.matchTPId, tournament: s.tournament, startAt: s.startAt, lockAt: s.lockAt,
             players: s.players.map(p => ({ id: p.id, name: p.name, countryISO2: p.countryISO2, countryISO3: p.countryISO3,
                 countryFull: p.countryFull, seed: p.seed, rank: p.rank })), odds: s.odds, bookmakers: s.bookmakers,
+            ...(s.oddsKind === 'model-fair' ? {oddsKind: s.oddsKind} : {}),
             model: s.model ? { version: s.model.version, p1: s.model.p1, issuedAt: s.model.issuedAt } : null },
         settlement: { status: result.status, units: result.units, reason: result.reason, settledAt: result.settledAt } };
 }

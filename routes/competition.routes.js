@@ -40,6 +40,7 @@ export function createCompetitionRouter({ service, auth = protect, limits = {}, 
     const member = rateLimit({ windowMs: 60000, max: limits.user ?? 60, standardHeaders: true, legacyHeaders: false,
         keyGenerator: req => String(req.user._id), message: { code: 'COMPETITION_RATE_LIMIT' } });
     router.get('/rules', handle(async (req, res) => { query(req); res.json(await service.rules()); }));
+    router.get('/openings', handle(async (req, res) => { query(req); res.json(await service.openings()); }));
     router.get('/leaderboard', handle(async (req, res) => {
         query(req, ['month', 'demo']); res.json(await service.leaderboard(competitionMonth(req.query.month, now()), demo(req)));
     }));

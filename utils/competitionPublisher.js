@@ -9,7 +9,7 @@ export async function publishCompetitionObservation({ collection, input, allowed
         || +new Date(row.oddsObservedAt) > +now || (row.model && +new Date(row.model.issuedAt) > +now))
         throw competitionError('COMPETITION_INVALID_SOURCE', 400);
     const existing = await collection.findOne({ _id: row.matchTPId }, { maxTimeMS: 5000 });
-    if (existing && (existing.source !== row.source || existing.sourceEventId !== row.sourceEventId
+    if (existing && (existing.source !== row.source || existing.sourceEventId !== row.sourceEventId || existing.oddsKind !== row.oddsKind
         || existing.players.some((p, i) => p.id !== row.players[i].id)))
         throw competitionError('COMPETITION_SOURCE_CONFLICT', 409);
     if (existing && (row.revision <= existing.revision
@@ -22,7 +22,12 @@ export async function publishCompetitionObservation({ collection, input, allowed
     const document = { ...row, _id: row.matchTPId, firstLockAt,
         publishedAt: now.toISOString(), pendingSettlement: ['finished', 'cancelled', 'walkover', 'retired'].includes(row.status) };
     if (existing) {
-        const result = await collection.replaceOne({ _id: row.matchTPId, revision: existing.revision }, document, { maxTimeMS: 5000 });
+        // Keep the original replacement contract for legacy sources. A Rally
+        // heartbeat must not erase the acceptedReads increment of a concurrent pick.
+        const {_id, ...fields}=document;
+        const result = row.oddsKind==='model-fair'
+            ? await collection.updateOne({ _id, revision:existing.revision },{$set:fields,$unset:{rallyHeld:''}},{maxTimeMS:5000})
+            : await collection.replaceOne({ _id: row.matchTPId, revision: existing.revision }, document, { maxTimeMS: 5000 });
         if (!result.matchedCount) throw competitionError('COMPETITION_SOURCE_CONFLICT', 409);
     } else {
         await collection.insertOne(document, { maxTimeMS: 5000 });
