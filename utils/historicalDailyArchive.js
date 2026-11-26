@@ -1,4 +1,5 @@
 import { ArchiveError } from './private-archive-reader/reader.mjs';
+import { readHistoricalMatchList } from './historicalMatchLists.js';
 
 export const FIRST_RECENT_DAY = '2026-11-01';
 const daily = /^daily\/(\d{4})(\d{2})(\d{2})\.br$/;
@@ -11,7 +12,7 @@ const historicalDay = path => {
 
 // Augment the existing recent head without changing its release identity.
 // Historical reports, ratings, entity indexes and permission rules do not
-// fall through. The only extra public content is old daily lists and details.
+// fall through. Entity match lists use the same date boundary as the daily grid.
 export function withHistoricalDailyArchive(recent, getHistory, onHistoryUnavailable = () => {}) {
     async function lookup(axis, id, options) {
         const found = await recent[axis](id, options);
@@ -47,6 +48,8 @@ export function withHistoricalDailyArchive(recent, getHistory, onHistoryUnavaila
             }
         },
         async read(kind, name, options) {
+            if(kind==='players/matches'||kind==='tournaments/matches')
+                return readHistoricalMatchList(recent,getHistory,FIRST_RECENT_DAY,kind,name,options);
             if (kind === 'daily' && historicalDay(`daily/${name}.br`))
                 return (await getHistory()).read(kind, name, options);
             if (kind === 'matches')
