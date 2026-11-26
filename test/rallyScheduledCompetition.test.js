@@ -16,6 +16,13 @@ test('displayed future minute opens without a TE confirmation; wrong ids, date-o
     assert.deepEqual(get({results:{day,schema:'bonzobyte.provisional-results.v1',rows:[[tp]]}}),[]);
     assert.deepEqual(get({now:Date.parse(start)}),[]);
 });
+test('same original displayed quote after a model rerun or player order reversal',()=>{
+    const daily={matches:[{...m,matchId:45,tournamentEventTPId:99,dateTime:'2026-11-26',modelProbabilityPlayer1:59}]};
+    for(const [a,b,p] of [[1,2,.75],[2,1,.25]]){
+        const grades={schema:'bonzobyte.issued-forecast-grades.v2',day,rows:[[tp,45,a,b,99,p,now-3000,now-2000,now-1000,null,'display',null]]};
+        assert.deepEqual(get({daily,grades})[0].odds,[1/.75,4]);
+    }
+});
 test('19:59 is eligible; same quote at exactly 20:00 is rejected by the submitting server',async()=>{
     const [o]=get();let at=Date.parse(start)-1000, pick;
     const source={...o,scheduleCheckedAt:new Date(at).toISOString(),firstLockAt:start};

@@ -32,10 +32,13 @@ export function dailyOffers({daily,schedule,grades,results,day,now}) {
             blocked.add(tp);continue;
         }
         if(m.isFinished!==false||blocked.has(tp)||!s||s[1]!==m.player1TPId||s[2]!==m.player2TPId)continue;
-        const aligned=g&&g[1]===m.matchId&&g[4]===m.tournamentEventTPId&&g[2]===s[1]&&g[3]===s[2];
-        const p=aligned?g[5]:m.modelProbabilityPlayer1/100;
-        const issued=aligned&&Number.isSafeInteger(g[7])?iso(g[7]):m.publicForecastIssuedAtUtc;
-        if(!Number.isFinite(m.modelProbabilityPlayer1)||Math.abs(100*p-m.modelProbabilityPlayer1)>1e-9)continue;
+        // The grid gives the first published pick precedence over a later model rerun.
+        const bound=g&&g[1]===m.matchId&&g[4]===m.tournamentEventTPId&&
+            g.slice(6,9).every(n=>Number.isSafeInteger(n)&&n>0)&&g[6]<=g[7]&&g[7]<=now&&g[8]<=now&&
+            ['display','issued'].includes(g[10])&&m.dateTime?.slice(0,10).replaceAll('-','')===day;
+        const exact=bound&&g[2]===s[1]&&g[3]===s[2], reversed=bound&&g[2]===s[2]&&g[3]===s[1];
+        const p=exact?g[5]:reversed?1-g[5]:m.modelProbabilityPlayer1/100;
+        const issued=exact||reversed?iso(g[7]):m.publicForecastIssuedAtUtc;
         const o=offer({tp,players:[{id:s[1],name:m.player1Name},{id:s[2],name:m.player2Name}],title:m.tournamentEventName,
             start:s[3],at:schedule.observedAt,p,issued,day,now});if(o)offers.push(o);
     }
