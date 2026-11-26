@@ -141,7 +141,8 @@ export function createCompetitionStore({ connection, User, environment, allowedS
         }
         return { processed };
     }
-    const candidates = at => matches().find({status:'scheduled',statusObservedAt:{$gte:new Date(+at-120000).toISOString()},
+    const candidates = at => matches().find({status:'scheduled',rallyHeld:{$ne:true},$or:[
+        {statusObservedAt:{$gte:new Date(+at-120000).toISOString()}},{scheduleCheckedAt:{$gte:new Date(+at-120000).toISOString()}}],
         source:{$in:allowedSources}, firstLockAt:{$gt:at.toISOString()}},opts()).limit(2000).toArray();
     return { initialize, candidates, readMatch, own, ownMatch, publicPicks, accept, community, leaderboard, reconcile };
 }

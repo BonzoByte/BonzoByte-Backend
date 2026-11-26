@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import { sharedCompetitionPick } from './competitionPrivacy.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { COMPETITION_RULES, competitionError, competitionEligibility, competitionSnapshot,
-    snapshotHash, competitionSummary } from './competitionPolicy.js';
+    snapshotHash, competitionSummary, competitionLockAt, validUntil } from './competitionPolicy.js';
 
 export function createCompetition({ store, secret, allowedSources = [], modelFairOnly = false, connected=()=>allowedSources.length>0, available = () => true, now = () => new Date() }) {
     const key = createHash('sha256').update('bonzobyte-competition-quote\0' + (secret || '')).digest('hex');
@@ -22,7 +22,7 @@ export function createCompetition({ store, secret, allowedSources = [], modelFai
         async openings() {
             guard(); const at = now(), rows = await store.candidates(at);
             const entries = rows.flatMap(row => competitionEligibility(row, at, allowedSources, { modelFairOnly }) ? [] :
-                [{id:row.matchTPId, until:Math.min(Date.parse(competitionSnapshot(row).lockAt),Date.parse(row.statusObservedAt)+120000)}]);
+                [{id:row.matchTPId, until:validUntil(row)}]);
             return {serverAt:+at, entries};
         },
         async match(actor, id) {
@@ -36,7 +36,7 @@ export function createCompetition({ store, secret, allowedSources = [], modelFai
                     { algorithm: 'HS256', subject: String(actor.user), audience: 'competition', issuer: 'bonzobyte', expiresIn: 90 });
                 quote = { snapshot, token, expiresAt: new Date(+at + 90000).toISOString() };
             }
-            const closed = source && (source.status !== 'scheduled' || +at >= +new Date(source.firstLockAt || +new Date(source.startAt) - 300000));
+            const closed = source && (source.status !== 'scheduled' || +at >= competitionLockAt(source));
             return { available: !reason, reason, quote, pick: publicPick(pick),
                 community: closed ? await store.community(id, at) : null, serverAt: at.toISOString() };
         },

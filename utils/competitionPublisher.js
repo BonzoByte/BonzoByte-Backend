@@ -1,4 +1,4 @@
-import { competitionError, validateCompetitionObservation } from './competitionPolicy.js';
+import { competitionError, competitionLockAt, validateCompetitionObservation } from './competitionPolicy.js';
 
 /** Internal trusted feed adapter. Not exposed through a public/user HTTP route.
  * Callers must obtain source-observed timestamps from the feed, not invent them
@@ -17,8 +17,7 @@ export async function publishCompetitionObservation({ collection, input, allowed
         || Date.parse(row.oddsObservedAt) < Date.parse(existing.oddsObservedAt)
         || (existing.status !== 'scheduled' && row.status === 'scheduled')))
         throw competitionError('COMPETITION_SOURCE_CONFLICT', 409);
-    const firstLockAt = new Date(Math.min(Date.parse(row.startAt) - 300000,
-        existing ? +new Date(existing.firstLockAt) : Infinity)).toISOString();
+    const firstLockAt = new Date(competitionLockAt({...row,firstLockAt:existing?.firstLockAt})).toISOString();
     const document = { ...row, _id: row.matchTPId, firstLockAt,
         publishedAt: now.toISOString(), pendingSettlement: ['finished', 'cancelled', 'walkover', 'retired'].includes(row.status) };
     if (existing) {
