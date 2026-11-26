@@ -1,6 +1,8 @@
 import { competitionError, COMPETITION_RULES, settleCompetitionPick } from './competitionPolicy.js';
 import { competitionProfileId, competitionProfileQuery } from './competitionPrivacy.js';
 const maxMonthlyPicks = 31 * COMPETITION_RULES.dailyLimit;
+// Null also matches picks written before withdrawal was introduced.
+const active = { cancelledAt: null };
 
 export function createCompetitionStore({ connection, User, environment, allowedSources = [], now = () => new Date() }) {
     if (!['development', 'production', 'development-demo', 'development-fixtures'].includes(environment)) throw new Error('Invalid competition environment');
@@ -38,10 +40,10 @@ export function createCompetitionStore({ connection, User, environment, allowedS
     const readMatch = (id, session) => matches().findOne({ _id: id }, opts(session));
     async function own(actor, month) {
         await assertActor(actor);
-        const rows = await picks().find({ environment, userId: actor.user, month }, opts()).sort({ submittedAt: -1 }).limit(maxMonthlyPicks + 1).toArray();
+        const rows = await picks().find({ environment, userId: actor.user, month, ...active }, opts()).sort({ submittedAt: -1 }).limit(maxMonthlyPicks + 1).toArray();
         if (rows.length > maxMonthlyPicks) throw competitionError('COMPETITION_UNAVAILABLE');
         const today = now().toISOString().slice(0, 10);
-        const used = await picks().countDocuments({ environment, userId: actor.user, day: today }, opts());
+        const used = await picks().countDocuments({ environment, userId: actor.user, day: today, ...active }, opts());
         await assertActor(actor);
         return { rows, remainingToday: Math.max(0, COMPETITION_RULES.dailyLimit - used) };
     }
@@ -52,7 +54,7 @@ export function createCompetitionStore({ connection, User, environment, allowedS
     async function ownStats(actor) {
         await assertActor(actor);
         const [totals] = await picks().aggregate([
-            { $match: { environment, userId: actor.user } },
+            { $match: { environment, userId: actor.user, ...active } },
             { $group: { _id: null,
                 pending: { $sum: { $cond: [{ $eq: [{ $ifNull: ['$settlement', null] }, null] }, 1, 0] } },
                 won: { $sum: { $cond: [{ $eq: ['$settlement.status', 'won'] }, 1, 0] } },
@@ -68,7 +70,7 @@ export function createCompetitionStore({ connection, User, environment, allowedS
         const user = await User.collection.findOne(query, { ...opts(), projection });
         if (!user) throw competitionError('COMPETITION_PROFILE_UNAVAILABLE', 404);
         const at = now().toISOString();
-        const rows = await picks().find({ environment, userId: user._id, month,
+        const rows = await picks().find({ environment, userId: user._id, month, ...active,
             'settlement.status': { $in: ['won', 'lost', 'void'] },
             'settlement.settledAt': { $type: 'string', $lte: at },
             'snapshot.startAt': { $type: 'string', $lte: at }, 'snapshot.lockAt': { $type: 'string', $lte: at },
@@ -88,23 +90,54 @@ export function createCompetitionStore({ connection, User, environment, allowedS
             const existing = await picks().findOne({ environment, userId: actor.user, matchTPId: id }, opts(session));
             const source = await readMatch(id, session);
             const at = now(), day = at.toISOString().slice(0, 10);
-            const used = await picks().countDocuments({ environment, userId: actor.user, day }, opts(session));
-            const row = create({ source, existing, used, at });
-            if (existing) return existing;
+            const used = await picks().countDocuments({ environment, userId: actor.user, day, ...active }, opts(session));
+            const current = existing?.cancelledAt ? null : existing;
+            const row = create({ source, existing: current, used, at, epoch: existing?.withdrawalCount || 0 });
+            if (current) return current;
             // Serializes acceptance against a concurrent source update / earlier start.
             const locked = await matches().updateOne({ _id: id, revision: source.revision },
                 { $inc: { acceptedReads: 1 } }, opts(session));
             if (!locked.matchedCount) throw competitionError('COMPETITION_QUOTE_CHANGED', 409);
             const entry = { ...row, environment, userId: actor.user, matchTPId: id, day,
                 month: day.slice(0, 7), submittedAt: at.toISOString(), settlement: null, settlementHistory: [] };
-            await picks().insertOne(entry, opts(session));
+            if (existing) {
+                await picks().updateOne({ _id: existing._id, cancelledAt: existing.cancelledAt },
+                    { $set: { ...entry, cancelledAt: null } }, opts(session));
+            } else await picks().insertOne(entry, opts(session));
             return entry;
+        }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, maxCommitTimeMS: 3000, timeoutMS: 5000 });
+    }
+    async function withdraw(actor, id, submittedAt, check) {
+        if (['development-demo', 'development-fixtures'].includes(environment)) throw competitionError('COMPETITION_DEMO_READ_ONLY', 403);
+        return connection.transaction(async session => {
+            await assertActor(actor, session, true);
+            const target = { environment, userId: actor.user, matchTPId: id, submittedAt };
+            const pick = await picks().findOne(target, opts(session));
+            if (!pick) throw competitionError('COMPETITION_PICK_CHANGED', 409);
+            if (pick.cancelledAt) return { withdrawn: true };
+            const source = await readMatch(id, session), at = now();
+            const deadline = check(pick, source, at);
+            // Write the same match record as the publisher; a concurrent live/score
+            // update forces a transaction retry and a fresh eligibility check.
+            const locked = await matches().updateOne({ _id: id, revision: source.revision,
+                $expr: { $lt: ['$$NOW', deadline] } }, { $inc: { withdrawalWrites: 1 } }, opts(session));
+            if (!locked.matchedCount) throw competitionError('COMPETITION_LOCKED', 409);
+            const cancelledAt = at.toISOString();
+            const changed = await picks().updateOne({ ...target, ...active, settlement: null,
+                $expr: { $lt: ['$$NOW', deadline] } }, {
+                $set: { cancelledAt }, $inc: { withdrawalCount: 1 },
+                $push: { withdrawalHistory: { $each: [{ submittedAt, cancelledAt, side: pick.side,
+                    playerId: pick.snapshot.players[pick.side].id, odds: pick.snapshot.odds[pick.side],
+                    lockAt: pick.snapshot.lockAt }], $slice: -32 } },
+            }, opts(session));
+            if (!changed.matchedCount) throw competitionError('COMPETITION_LOCKED', 409);
+            return { withdrawn: true };
         }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, maxCommitTimeMS: 3000, timeoutMS: 5000 });
     }
     async function community(id, at) {
         // Aggregates only, and never before any accepted pick's immutable deadline.
         const rows = await picks().aggregate([
-            { $match: { environment, matchTPId: id, 'snapshot.lockAt': { $lte: at.toISOString() } } },
+            { $match: { environment, matchTPId: id, ...active, 'snapshot.lockAt': { $lte: at.toISOString() } } },
             { $group: { _id: '$side', count: { $sum: 1 } } },
         ], { maxTimeMS: 5000 }).toArray();
         const counts = [0, 0]; for (const row of rows) if ([0, 1].includes(row._id)) counts[row._id] = row.count;
@@ -113,7 +146,7 @@ export function createCompetitionStore({ connection, User, environment, allowedS
     async function leaderboard(month) {
         const valid = { $in: ['$settlement.status', ['won', 'lost']] };
         const rows = await picks().aggregate([
-            { $match: { environment, month } },
+            { $match: { environment, month, ...active } },
             { $group: { _id: '$userId', submitted: { $sum: 1 },
                 settled: { $sum: { $cond: [valid, 1, 0] } },
                 won: { $sum: { $cond: [{ $eq: ['$settlement.status', 'won'] }, 1, 0] } },
@@ -139,13 +172,13 @@ export function createCompetitionStore({ connection, User, environment, allowedS
         let processed = 0;
         const sources = await matches().find({ pendingSettlement: true, source: { $in: allowedSources } }, opts()).sort({ _id: 1 }).limit(10).toArray();
         for (const source of sources) {
-            const query = { environment, matchTPId: source.matchTPId,
+            const query = { environment, matchTPId: source.matchTPId, ...active,
                 $or: [{ settlement: null }, { 'settlement.sourceRevision': { $lt: source.revision } }] };
             const batch = await picks().find(query, opts()).limit(100).toArray();
             for (const pick of batch) {
                 const settlement = settleCompetitionPick(pick, source, now());
                 if (!settlement) continue;
-                await picks().updateOne({ _id: pick._id, environment, ...query }, {
+                await picks().updateOne({ _id: pick._id, submittedAt: pick.submittedAt, ...query }, {
                     $set: { settlement }, ...(pick.settlement ? { $push: { settlementHistory: pick.settlement } } : {}),
                 }, opts());
                 processed++;
@@ -158,5 +191,5 @@ export function createCompetitionStore({ connection, User, environment, allowedS
     const candidates = at => matches().find({status:'scheduled',rallyHeld:{$ne:true},$or:[
         {statusObservedAt:{$gte:new Date(+at-120000).toISOString()}},{scheduleCheckedAt:{$gte:new Date(+at-120000).toISOString()}}],
         source:{$in:allowedSources}, firstLockAt:{$gt:at.toISOString()}},opts()).limit(2000).toArray();
-    return { initialize, candidates, readMatch, own, ownStats, ownMatch, publicPicks, accept, community, leaderboard, reconcile };
+    return { initialize, candidates, readMatch, own, ownStats, ownMatch, publicPicks, accept, withdraw, community, leaderboard, reconcile };
 }

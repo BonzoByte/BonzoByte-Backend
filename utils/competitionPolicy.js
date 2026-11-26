@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 
-export const COMPETITION_RULES = Object.freeze({ version: 3, stake: 1, dailyLimit: 10,
+export const COMPETITION_RULES = Object.freeze({ version: 4, stake: 1, dailyLimit: 10,
     minimumSettled: 30, lockMinutes: 0, timeZone: 'UTC', money: false, prizes: true,
     rewardMembership: 'premium', rewardDays: 30, rewardReviewRequired: true, rewardAutomatic: false,
-    changesAllowed: false, ranking: 'netUnits', monthBy: 'firstSubmission',
+    changesAllowed: false, withdrawalWhileOpen: true, ranking: 'netUnits', monthBy: 'firstSubmission',
     statusMaxAgeSeconds: 120, oddsMaxAgeSeconds: 600 });
 export const competitionError = (code, status = 503) => Object.assign(new Error(code), { code, status });
 export const validCompetitionId = value => Number.isSafeInteger(value) && value > 0;

@@ -27,12 +27,13 @@ export function createCompetition({ store, secret, allowedSources = [], modelFai
         },
         async match(actor, id) {
             guard(); const at = now();
-            const [source, pick] = await Promise.all([store.readMatch(id), store.ownMatch(actor, id)]);
+            const [source, stored] = await Promise.all([store.readMatch(id), store.ownMatch(actor, id)]);
+            const pick = stored?.cancelledAt ? null : stored;
             const reason = pick ? 'alreadyPicked' : competitionEligibility(source, at, allowedSources, {modelFairOnly});
             let quote = null;
             if (!reason) {
                 const snapshot = competitionSnapshot(source);
-                const token = jwt.sign({ match: id, hash: snapshotHash(snapshot), jti: randomUUID(), iat: Math.floor(+at / 1000) }, key,
+                const token = jwt.sign({ match: id, epoch: stored?.withdrawalCount || 0, hash: snapshotHash(snapshot), jti: randomUUID(), iat: Math.floor(+at / 1000) }, key,
                     { algorithm: 'HS256', subject: String(actor.user), audience: 'competition', issuer: 'bonzobyte', expiresIn: 90 });
                 quote = { snapshot, token, expiresAt: new Date(+at + 90000).toISOString() };
             }
@@ -47,12 +48,13 @@ export function createCompetition({ store, secret, allowedSources = [], modelFai
                 throw competitionError('COMPETITION_INVALID_BODY', 400);
             // Verify again inside the committing transaction; deadlines cannot be
             // bypassed by opening the dialog early or stalling a request.
-            const pick = await store.accept(actor, id, ({ source, existing, used, at }) => {
+            const pick = await store.accept(actor, id, ({ source, existing, used, at, epoch = 0 }) => {
                 if (existing) {
                     if (existing.side === body.side && existing.quoteTokenHash === snapshotHash(body.token)) return existing;
                     throw competitionError('COMPETITION_ALREADY_PICKED', 409);
                 }
                 const quote = decode(body.token, actor, id);
+                if ((quote.epoch ?? 0) !== epoch) throw competitionError('COMPETITION_QUOTE_CHANGED', 409);
                 const reason = competitionEligibility(source, at, allowedSources, {modelFairOnly});
                 if (reason) throw competitionError('COMPETITION_LOCKED', 409);
                 if (used >= COMPETITION_RULES.dailyLimit) throw competitionError('COMPETITION_DAILY_LIMIT', 409);
@@ -62,6 +64,20 @@ export function createCompetition({ store, secret, allowedSources = [], modelFai
                     quoteTokenHash: snapshotHash(body.token) };
             });
             return { pick: publicPick(pick) };
+        },
+        async withdraw(actor, id, body) {
+            guard();
+            if (!body || Object.keys(body).join(',') !== 'submittedAt' || typeof body.submittedAt !== 'string'
+                || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.submittedAt))
+                throw competitionError('COMPETITION_INVALID_BODY', 400);
+            return store.withdraw(actor, id, body.submittedAt, (pick, source, at) => {
+                if (pick.settlement || competitionEligibility(source, at, allowedSources, {modelFairOnly})
+                    || !source.players.every((p, i) => p.id === pick.snapshot.players[i]?.id))
+                    throw competitionError('COMPETITION_LOCKED', 409);
+                const deadline = Math.min(Date.parse(pick.snapshot.lockAt), validUntil(source));
+                if (!(+at < deadline)) throw competitionError('COMPETITION_LOCKED', 409);
+                return new Date(deadline);
+            });
         },
         async ownStats(actor) { guard(); return store.ownStats(actor); },
         async me(actor, month) {

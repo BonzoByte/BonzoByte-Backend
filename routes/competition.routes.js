@@ -60,5 +60,8 @@ export function createCompetitionRouter({ service, auth = protect, limits = {}, 
     router.post('/matches/:id', auth, member, verified, handle(async (req, res) => {
         query(req); res.json(await service.submit(actor(req), competitionId(req.params.id), req.body));
     }));
+    router.post('/matches/:id/withdraw', auth, member, verified, handle(async (req, res) => {
+        query(req); res.json(await service.withdraw(actor(req), competitionId(req.params.id), req.body));
+    }));
     return router;
 }

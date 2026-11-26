@@ -27,6 +27,41 @@ test('derives the full precision pair without any bookmaker fields',()=>{
     assert.equal(modelFairOdds(1),null);
 });
 
+test('withdrawal rechecks the source and original deadline, and requires the exact pick', async()=>{
+    let time=new Date(at),source=packet,pick={submittedAt:issuedAt,settlement:null,
+        snapshot:{players:packet.players,lockAt:'2026-11-22T12:55:00.000Z'}};
+    const actor={user:'fixture'};
+    const store={withdraw:async(who,id,stamp,check)=>{
+        assert.equal(who,actor); assert.equal(id,packet.matchTPId); assert.equal(stamp,issuedAt);
+        check(pick,source,time); return {withdrawn:true};
+    }};
+    const svc=createCompetition({store,secret:'fixture',allowedSources,modelFairOnly:true});
+    const attempt=()=>svc.withdraw(actor,packet.matchTPId,{submittedAt:issuedAt});
+    assert.deepEqual(await attempt(),{withdrawn:true});
+    for (const change of [{status:'live'},{status:'finished'}, {rallyHeld:true},{statusObservedAt:issuedAt},
+        {players:[...packet.players].reverse()}]) {
+        source={...packet,...change}; await assert.rejects(attempt(),{code:'COMPETITION_LOCKED'});
+    }
+    source={...packet,startAt:'2026-11-22T14:00:00.000Z'};
+    time=new Date(pick.snapshot.lockAt);await assert.rejects(attempt(),{code:'COMPETITION_LOCKED'});
+    time=new Date(at);pick.settlement={status:'won'};await assert.rejects(attempt(),{code:'COMPETITION_LOCKED'});
+    await assert.rejects(svc.withdraw(actor,packet.matchTPId,{}),{code:'COMPETITION_INVALID_BODY'});
+});
+
+test('a withdrawn pick needs a fresh quote to be submitted again',async()=>{
+    const actor={user:'fixture'}, now=()=>new Date(at);
+    let prior=null;
+    const store={readMatch:async()=>packet,ownMatch:async()=>prior,accept:async(_actor,id,create)=>
+        ({...create({source:packet,used:0,at:now(),existing:null,epoch:prior?.withdrawalCount || 0}),matchTPId:id})};
+    const svc=createCompetition({store,secret:'fixture',allowedSources,now});
+    const old=await svc.match(actor,packet.matchTPId);
+    prior={cancelledAt:at,withdrawalCount:1};
+    await assert.rejects(svc.submit(actor,packet.matchTPId,{side:0,token:old.quote.token}),{code:'COMPETITION_QUOTE_CHANGED'});
+    const fresh=await svc.match(actor,packet.matchTPId);
+    assert.equal(fresh.pick,null);assert.equal(fresh.available,true);
+    assert.equal((await svc.submit(actor,packet.matchTPId,{side:1,token:fresh.quote.token})).pick.side,1);
+});
+
 test('tenth prediction is accepted; the eleventh is rejected at submission',async()=>{
     let used=9;
     const now=()=>new Date(at),actor={user:'limit-fixture'};
